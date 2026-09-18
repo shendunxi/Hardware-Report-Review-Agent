@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "source_root": "D:\\Document\\AI创新应用大赛\\硬件测试报告审核智能体\\硬件测试报告及检查表",
+  "samples": [
+    {"id":"S-01","relative_path":"HPYR2D\\DS\\HYR2D DS Project Hardware Test Report（DVB-C for Overseas）V1.23-0327.xls","absolute_path":"D:\\Document\\AI创新应用大赛\\硬件测试报告审核智能体\\硬件测试报告及检查表\\HPYR2D\\DS\\HYR2D DS Project Hardware Test Report（DVB-C for Overseas）V1.23-0327.xls","expected_extension":".xls","group_id":"R-01","role":"TASK_PRIMARY"},
+    {"id":"S-02","relative_path":"HPYR2D\\DS\\HYR2D DS WiFi5 Module Test Report-0327.xls","absolute_path":"D:\\Document\\AI创新应用大赛\\硬件测试报告审核智能体\\硬件测试报告及检查表\\HPYR2D\\DS\\HYR2D DS WiFi5 Module Test Report-0327.xls","expected_extension":".xls","group_id":"R-02","role":"TASK_PRIMARY"},
+    {"id":"S-03","relative_path":"TCY30\\换DDR\\TCY30更换千奕 DDR（47NH-RS32G1-0780）关键物料硬件测试报告（GPON+CATV).xls","absolute_path":"D:\\Document\\AI创新应用大赛\\硬件测试报告审核智能体\\硬件测试报告及检查表\\TCY30\\换DDR\\TCY30更换千奕 DDR（47NH-RS32G1-0780）关键物料硬件测试报告（GPON+CATV).xls","expected_extension":".xls","group_id":"R-03","role":"TASK_PRIMARY"},
+    {"id":"S-04","relative_path":"TCY30\\DS\\TCY30 DS项目路由器模块测试报告v4.9.xls","absolute_path":"D:\\Document\\AI创新应用大赛\\硬件测试报告审核智能体\\硬件测试报告及检查表\\TCY30\\DS\\TCY30 DS项目路由器模块测试报告v4.9.xls","expected_extension":".xls","group_id":"R-04","role":"TASK_PRIMARY"},
+    {"id":"S-05","relative_path":"TCY30\\DS\\TCY30 DS项目硬件测试报告(xPON)-V1.32.xls","absolute_path":"D:\\Document\\AI创新应用大赛\\硬件测试报告审核智能体\\硬件测试报告及检查表\\TCY30\\DS\\TCY30 DS项目硬件测试报告(xPON)-V1.32.xls","expected_extension":".xls","group_id":"R-05","role":"TASK_PRIMARY"},
+    {"id":"S-06","relative_path":"TCY30\\PP\\TCY30 (903442) PP 可靠性测试报告_20260609.doc","absolute_path":"D:\\Document\\AI创新应用大赛\\硬件测试报告审核智能体\\硬件测试报告及检查表\\TCY30\\PP\\TCY30 (903442) PP 可靠性测试报告_20260609.doc","expected_extension":".doc","group_id":"R-06","role":"TASK_PRIMARY"},
+    {"id":"S-07","relative_path":"TCY30\\PP\\TCY30 (903442) PP 可靠性测试报告_20260609.pdf","absolute_path":"D:\\Document\\AI创新应用大赛\\硬件测试报告审核智能体\\硬件测试报告及检查表\\TCY30\\PP\\TCY30 (903442) PP 可靠性测试报告_20260609.pdf","expected_extension":".pdf","group_id":"R-06","role":"COMPATIBILITY_ALTERNATE"},
+    {"id":"S-08","relative_path":"TCY30\\PP\\TCY30 pp项目路由器模块测试报告v4.9.xls","absolute_path":"D:\\Document\\AI创新应用大赛\\硬件测试报告审核智能体\\硬件测试报告及检查表\\TCY30\\PP\\TCY30 pp项目路由器模块测试报告v4.9.xls","expected_extension":".xls","group_id":"R-07","role":"TASK_PRIMARY"},
+    {"id":"S-09","relative_path":"TCY30\\PP\\TCY30 PP项目硬件测试报告(xPON)-V1.32.xls","absolute_path":"D:\\Document\\AI创新应用大赛\\硬件测试报告审核智能体\\硬件测试报告及检查表\\TCY30\\PP\\TCY30 PP项目硬件测试报告(xPON)-V1.32.xls","expected_extension":".xls","group_id":"R-08","role":"TASK_PRIMARY"},
+    {"id":"S-10","relative_path":"TFY03\\DS\\TFY03 DS BOB指标补测.xls","absolute_path":"D:\\Document\\AI创新应用大赛\\硬件测试报告审核智能体\\硬件测试报告及检查表\\TFY03\\DS\\TFY03 DS BOB指标补测.xls","expected_extension":".xls","group_id":"R-09","role":"TASK_PRIMARY"},
+    {"id":"S-11","relative_path":"TFY03\\DS\\TFY03 DS项目路由器模块测试报告v4.4.xls","absolute_path":"D:\\Document\\AI创新应用大赛\\硬件测试报告审核智能体\\硬件测试报告及检查表\\TFY03\\DS\\TFY03 DS项目路由器模块测试报告v4.4.xls","expected_extension":".xls","group_id":"R-10","role":"TASK_PRIMARY"},
+    {"id":"S-12","relative_path":"TFY03\\DS\\TFY03 DS项目硬件测试报告(FTTR)-V1.0.xls","absolute_path":"D:\\Document\\AI创新应用大赛\\硬件测试报告审核智能体\\硬件测试报告及检查表\\TFY03\\DS\\TFY03 DS项目硬件测试报告(FTTR)-V1.0.xls","expected_extension":".xls","group_id":"R-11","role":"TASK_PRIMARY"},
+    {"id":"S-13","relative_path":"TFY03\\DS\\TFY03-2.5G.pdf","absolute_path":"D:\\Document\\AI创新应用大赛\\硬件测试报告审核智能体\\硬件测试报告及检查表\\TFY03\\DS\\TFY03-2.5G.pdf","expected_extension":".pdf","group_id":"R-12","role":"TASK_PRIMARY"},
+    {"id":"S-14","relative_path":"TFY03\\PP\\TFY03 (903047) PP 可靠性测试报告_20240920.doc","absolute_path":"D:\\Document\\AI创新应用大赛\\硬件测试报告审核智能体\\硬件测试报告及检查表\\TFY03\\PP\\TFY03 (903047) PP 可靠性测试报告_20240920.doc","expected_extension":".doc","group_id":"R-13","role":"TASK_PRIMARY"},
+    {"id":"S-15","relative_path":"TFY03\\PP\\TFY03 (903047) PP 可靠性测试报告_20240920.pdf","absolute_path":"D:\\Document\\AI创新应用大赛\\硬件测试报告审核智能体\\硬件测试报告及检查表\\TFY03\\PP\\TFY03 (903047) PP 可靠性测试报告_20240920.pdf","expected_extension":".pdf","group_id":"R-13","role":"COMPATIBILITY_ALTERNATE"},
+    {"id":"S-16","relative_path":"TFY03\\PP\\TFY03 PP项目路由器模块测试报告v4.6.xls","absolute_path":"D:\\Document\\AI创新应用大赛\\硬件测试报告审核智能体\\硬件测试报告及检查表\\TFY03\\PP\\TFY03 PP项目路由器模块测试报告v4.6.xls","expected_extension":".xls","group_id":"R-14","role":"TASK_PRIMARY"},
+    {"id":"S-17","relative_path":"TFY03\\PP\\TFY03 PP项目硬件测试报告(FTTR)-V1.3.xls","absolute_path":"D:\\Document\\AI创新应用大赛\\硬件测试报告审核智能体\\硬件测试报告及检查表\\TFY03\\PP\\TFY03 PP项目硬件测试报告(FTTR)-V1.3.xls","expected_extension":".xls","group_id":"R-15","role":"TASK_PRIMARY"}
+  ]
+}

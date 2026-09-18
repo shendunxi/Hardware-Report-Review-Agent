@@ -1,0 +1,26 @@
+[project]
+name = "hw-review"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic>=2",
+    "sqlalchemy>=2",
+    "alembic",
+    "python-multipart",
+    "xlrd",
+    "openpyxl>=3.1,<4",
+    "xlutils>=2,<3",
+    "olefile",
+    "pymupdf",
+    "pywin32",
+    "psutil",
+]
+
+[project.optional-dependencies]
+test = ["pytest", "xlwt"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
