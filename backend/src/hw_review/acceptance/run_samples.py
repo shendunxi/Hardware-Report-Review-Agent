@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -20,6 +21,14 @@ from hw_review.services.staging import FileStager, fingerprint
 
 
 MAX_GATE_SECONDS = 20 * 60
+
+# The frozen sample tree lives outside the repository, so the manifest stores
+# only repository-safe relative paths and the root is supplied by the caller.
+SAMPLE_ROOT_ENV = "HW_REVIEW_SAMPLE_ROOT"
+
+
+class SamplePathError(ValueError):
+    """Manifest path defect; it must not be reported as a parsing failure."""
 
 
 class PeakRssSampler:
@@ -93,7 +102,47 @@ def _document_counts(document) -> dict:
     }
 
 
-def _load_manifest(path: Path) -> dict:
+def _portable_parts(relative_path: str) -> tuple[str, ...]:
+    """Normalize the manifest separator so one manifest works on every platform."""
+
+    return tuple(part for part in relative_path.replace("\\", "/").split("/") if part)
+
+
+def resolve_sample_path(sample_root: Path, relative_path: object) -> Path:
+    """Resolve one manifest entry, refusing anything outside the sample root.
+
+    Dropping the committed absolute paths makes ``relative_path`` the only input,
+    so it must not be able to reach outside the root the caller supplied.
+    """
+
+    if not isinstance(relative_path, str) or not relative_path.strip():
+        raise SamplePathError(
+            f"manifest relative_path must be a non-empty string, got {relative_path!r}"
+        )
+    normalized = relative_path.replace("\\", "/")
+    parts = _portable_parts(relative_path)
+    if not parts:
+        raise SamplePathError(f"manifest relative_path is empty: {relative_path!r}")
+    if normalized.startswith("/") or ":" in parts[0]:
+        raise SamplePathError(
+            f"manifest relative_path must be relative, not absolute: {relative_path}"
+        )
+    if any(part == ".." for part in parts):
+        raise SamplePathError(
+            f"manifest relative_path must not traverse upwards: {relative_path}"
+        )
+    root = Path(sample_root).resolve()
+    candidate = (root / Path(*parts)).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as error:
+        raise SamplePathError(
+            f"manifest relative_path escapes the sample root: {relative_path}"
+        ) from error
+    return candidate
+
+
+def _load_manifest(path: Path, sample_root: Path) -> dict:
     payload = json.loads(path.read_text(encoding="utf-8"))
     samples = payload.get("samples")
     if not isinstance(samples, list) or len(samples) != 17:
@@ -104,10 +153,15 @@ def _load_manifest(path: Path) -> dict:
     groups = {item.get("group_id") for item in samples}
     if len(groups) != 15:
         raise ValueError("manifest must contain exactly 15 business groups")
+    # Fail fast on a malformed manifest rather than emit suspect evidence.
+    for item in samples:
+        resolve_sample_path(sample_root, item.get("relative_path"))
     return payload
 
 
-def _parse_samples(manifest: dict, output_dir: Path) -> tuple[list[dict], dict[str, tuple]]:
+def _parse_samples(
+    manifest: dict, output_dir: Path, *, sample_root: Path
+) -> tuple[list[dict], dict[str, tuple]]:
     work_root = output_dir / "_work"
     stager = FileStager(work_root)
     cleaner = WorkspaceCleaner(work_root)
@@ -120,12 +174,20 @@ def _parse_samples(manifest: dict, output_dir: Path) -> tuple[list[dict], dict[s
     parsed: dict[str, tuple] = {}
 
     for sample in manifest["samples"]:
-        source_path = Path(sample["absolute_path"])
+        # Record only the portable manifest path: the resolved absolute path is an
+        # implementation detail and must not reach committed evidence.
+        relative_path = sample.get("relative_path")
+        path_error: SamplePathError | None = None
+        try:
+            source_path = resolve_sample_path(sample_root, relative_path)
+        except SamplePathError as error:
+            source_path = Path(sample_root)
+            path_error = error
         record = {
             "id": sample["id"],
             "group_id": sample["group_id"],
             "role": sample["role"],
-            "path": str(source_path),
+            "path": str(relative_path),
             "format": sample["expected_extension"].lstrip(".").upper(),
             "bytes": None,
             "before": None,
@@ -151,8 +213,10 @@ def _parse_samples(manifest: dict, output_dir: Path) -> tuple[list[dict], dict[s
         }
         task_id = uuid5(NAMESPACE_URL, f"a11-acceptance:{sample['id']}")
         try:
+            if path_error is not None:
+                raise path_error
             if not source_path.is_file():
-                raise FileNotFoundError(str(source_path))
+                raise FileNotFoundError(str(relative_path))
             if source_path.suffix.lower() != sample["expected_extension"]:
                 raise ValueError("source extension does not match the frozen manifest")
             record["before"] = _fingerprint_payload(source_path)
@@ -181,6 +245,9 @@ def _parse_samples(manifest: dict, output_dir: Path) -> tuple[list[dict], dict[s
         except FileNotFoundError as error:
             record["error_stage"] = "SOURCE"
             record["error_code"], record["error_message"] = _stable_error(error, "SOURCE_NOT_FOUND")
+        except SamplePathError as error:
+            record["error_stage"] = "SOURCE"
+            record["error_code"], record["error_message"] = "INVALID_SAMPLE_PATH", str(error)[:1000]
         except Exception as error:
             record["error_stage"] = "PARSING"
             record["error_code"], record["error_message"] = _stable_error(error, "PARSER_FAILURE")
@@ -201,8 +268,11 @@ def _parse_samples(manifest: dict, output_dir: Path) -> tuple[list[dict], dict[s
     by_id = {item["id"]: item for item in records}
     for sample in manifest["samples"]:
         record = by_id[sample["id"]]
-        source_path = Path(sample["absolute_path"])
-        if source_path.is_file():
+        try:
+            source_path = resolve_sample_path(sample_root, sample.get("relative_path"))
+        except SamplePathError:
+            source_path = None
+        if source_path is not None and source_path.is_file():
             record["after"] = _fingerprint_payload(source_path)
         record["source_unchanged"] = record["before"] is not None and record["before"] == record["after"]
 
@@ -391,22 +461,24 @@ def _release_gates_markdown(result: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def run(manifest_path: Path, output_dir: Path) -> dict:
+def run(manifest_path: Path, output_dir: Path, *, sample_root: Path) -> dict:
     repository_root = Path(__file__).resolve().parents[4]
-    manifest = _load_manifest(manifest_path)
+    manifest = _load_manifest(manifest_path, sample_root)
     output_dir.mkdir(parents=True, exist_ok=True)
     started_at = _utc_now()
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    files, parsed = _parse_samples(manifest, output_dir)
+    files, parsed = _parse_samples(manifest, output_dir, sample_root=sample_root)
     groups = _evaluate_groups(manifest, files, parsed)
     gates = _build_gates(files, groups, repository_root)
     result = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "run_id": run_id,
         "started_at": started_at,
         "completed_at": _utc_now(),
-        "manifest": str(manifest_path.resolve()),
-        "source_root": manifest["source_root"],
+        # Record caller-supplied values verbatim: committed evidence must not
+        # carry machine-specific absolute paths.
+        "manifest": str(manifest_path),
+        "sample_root": str(sample_root),
         "files": files,
         "report_groups": groups,
         "gates": gates,
@@ -422,8 +494,21 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--sample-root",
+        type=Path,
+        default=None,
+        help=f"root of the frozen sample tree (defaults to {SAMPLE_ROOT_ENV})",
+    )
     args = parser.parse_args(argv)
-    result = run(args.manifest, args.output)
+    root = args.sample_root
+    if root is None:
+        root = os.environ.get(SAMPLE_ROOT_ENV)
+    if root is None or not str(root).strip():
+        parser.error(
+            f"--sample-root is required, or set {SAMPLE_ROOT_ENV} to the sample tree root"
+        )
+    result = run(args.manifest, args.output, sample_root=Path(root))
     print(json.dumps({"run_id": result["run_id"], "decision": result["overall_release_decision"], "gates": result["gates"]}, ensure_ascii=False))
     return 0 if result["overall_release_decision"] == "GO" else 1
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -11,6 +12,7 @@ import pymupdf
 import pytest
 import psutil
 
+from hw_review.acceptance.run_samples import SAMPLE_ROOT_ENV
 from hw_review.domain.enums import FileRole
 from hw_review.domain.models import SourceFileCreate, StagedFile
 from hw_review.parsers.pdf import PdfParseError, PdfParser
@@ -18,10 +20,12 @@ from hw_review.services.cleanup import WorkspaceCleaner
 from hw_review.services.staging import FileStager, fingerprint
 
 
-S07 = Path(
-    r"D:\Document\AI创新应用大赛\硬件测试报告审核智能体\硬件测试报告及检查表"
-    r"\TCY30\PP\TCY30 (903442) PP 可靠性测试报告_20260609.pdf"
+# The frozen tree lives outside the repository and moves between machines, so
+# the root is supplied exactly the way the acceptance runner supplies it.
+SAMPLE_ROOT = Path(
+    os.environ.get(SAMPLE_ROOT_ENV, r"D:\Document\AI创新应用大赛\硬件测试报告及检查表")
 )
+S07 = SAMPLE_ROOT / (r"TCY30\PP\TCY30 (903442) PP 可靠性测试报告_20260609.pdf")
 
 
 def _staged(path: Path, *, detected_format: str = "PDF") -> StagedFile:

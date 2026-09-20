@@ -123,6 +123,14 @@ input:focus, select:focus, textarea:focus { border-color: #246bfe; outline: 3px 
 .decision-form { display: grid; grid-template-columns: 150px minmax(220px,1fr) auto; gap: 10px; margin-top: 8px; }
 .failure-panel { border-color: #f2c7c3; }
 .readonly-note { color: #64748b; background: #f8fafc; }
+.audit-panel .panel-heading > span { color: #64748b; font-size: 13px; }
+.audit-panel .panel-heading h2 { margin-top: 4px; }
+.audit-timeline { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.audit-timeline li { position: relative; display: grid; grid-template-columns: 18px 1fr; gap: 12px; padding: 0 0 22px; }
+.audit-timeline li:not(:last-child)::before { position: absolute; top: 14px; bottom: 0; left: 6px; width: 2px; background: #dce7f7; content: ''; }
+.audit-dot { position: relative; z-index: 1; width: 12px; height: 12px; margin-top: 4px; border: 3px solid #dce8ff; border-radius: 50%; background: #246bfe; box-sizing: border-box; }
+.audit-timeline p { margin: 5px 0; color: #475569; }
+.audit-timeline small { color: #718096; }
 
 @media (max-width: 760px) {
   .vue-app-shell { grid-template-columns: 74px minmax(0, 1fr); }

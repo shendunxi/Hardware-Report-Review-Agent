@@ -22,7 +22,12 @@ from hw_review.domain.models import (
     TableCell,
 )
 from hw_review.parsers.base import a1_address
-from hw_review.parsers.word_worker import ConversionArtifacts, DocConversionError, WordWorker
+from hw_review.parsers.word_worker import (
+    POLICY_MICROSOFT_ONLY,
+    ConversionArtifacts,
+    DocConversionError,
+    WordWorker,
+)
 
 
 DocParseError = DocConversionError
@@ -41,12 +46,19 @@ class DocParser:
 
     version = "word-isolated-worker/v1"
 
-    def __init__(self, *, worker=None, timeout_seconds: int = 1200, format: str = "DOC") -> None:
+    def __init__(
+        self,
+        *,
+        worker=None,
+        timeout_seconds: int = 1200,
+        format: str = "DOC",
+        word_policy: str = POLICY_MICROSOFT_ONLY,
+    ) -> None:
         normalized = format.strip().upper()
         if normalized not in {"DOC", "DOCX"}:
             raise ValueError("DocParser format must be DOC or DOCX")
         self.format = normalized
-        self._worker = worker or WordWorker()
+        self._worker = worker or WordWorker(policy=word_policy)
         self._timeout_seconds = timeout_seconds
 
     def parse(self, staged: StagedFile) -> ReportDocument:
@@ -283,6 +295,7 @@ class DocParser:
                     word_version=artifacts.word_version,
                     duration_seconds=artifacts.duration_seconds,
                     peak_memory_bytes=artifacts.peak_memory_bytes,
+                    automation_host=artifacts.automation_host,
                 ),
             )
         finally:

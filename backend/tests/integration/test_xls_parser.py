@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ import pytest
 import xlrd
 import xlwt
 
+from hw_review.acceptance.run_samples import SAMPLE_ROOT_ENV
 from hw_review.domain.enums import FileRole
 from hw_review.domain.models import SourceFileCreate, StagedFile
 from hw_review.parsers.xls import XlsParseError, XlsParser
@@ -20,9 +22,13 @@ from hw_review.services.cleanup import WorkspaceCleaner
 from hw_review.services.staging import FileStager, fingerprint
 
 
-S01 = Path(
-    r"D:\Document\AI创新应用大赛\硬件测试报告审核智能体\硬件测试报告及检查表"
-    r"\HPYR2D\DS\HYR2D DS Project Hardware Test Report（DVB-C for Overseas）V1.23-0327.xls"
+# The frozen tree lives outside the repository and moves between machines, so
+# the root is supplied exactly the way the acceptance runner supplies it.
+SAMPLE_ROOT = Path(
+    os.environ.get(SAMPLE_ROOT_ENV, r"D:\Document\AI创新应用大赛\硬件测试报告及检查表")
+)
+S01 = SAMPLE_ROOT / (
+    r"HPYR2D\DS\HYR2D DS Project Hardware Test Report（DVB-C for Overseas）V1.23-0327.xls"
 )
 
 

@@ -24,3 +24,8 @@ test = ["pytest", "xlwt"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# Managed Windows hosts can carry a broken ACL on the default
+# %TEMP%\pytest-of-<user> directory, which makes every tmp_path-based test
+# error out with PermissionError. Keeping pytest's base temp inside the
+# repository sidesteps that host-specific temp root. `.tmp/` is git-ignored.
+addopts = "--basetemp=.tmp/pytest"

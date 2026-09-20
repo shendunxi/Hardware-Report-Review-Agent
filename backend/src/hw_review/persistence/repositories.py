@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
 
-from sqlalchemy import Engine, delete, func, insert, select, update
+from sqlalchemy import Engine, and_, delete, func, insert, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel
 from pydantic_core import to_jsonable_python
@@ -22,6 +22,7 @@ from hw_review.domain import (
     RuleResult,
     StageFailure,
     StagedFile,
+    TemplateAuditEvent,
     TemplateRule,
     TemplateStatus,
     TemplateValidationFinding,
@@ -37,6 +38,7 @@ from .tables import (
     source_files,
     stage_failures,
     tasks,
+    template_audit_events,
     template_rules,
     template_versions,
 )
@@ -319,6 +321,38 @@ def _template_rule_from_row(row) -> TemplateRule:
     )
 
 
+def _template_audit_values(event: TemplateAuditEvent) -> dict[str, Any]:
+    return {
+        "id": str(event.id),
+        "template_id": str(event.template_id),
+        "template_version": event.template_version,
+        "action": event.action.value,
+        "rule_id": event.rule_id,
+        "actor": event.actor,
+        "occurred_at": _utc_text(event.occurred_at),
+        "before_json": _json_text(event.before) if event.before is not None else None,
+        "after_json": _json_text(event.after) if event.after is not None else None,
+    }
+
+
+def _template_audit_from_row(row) -> TemplateAuditEvent:
+    return TemplateAuditEvent(
+        id=row.id,
+        template_id=row.template_id,
+        template_version=row.template_version,
+        action=row.action,
+        rule_id=row.rule_id,
+        actor=row.actor,
+        occurred_at=_utc_datetime(row.occurred_at),
+        before=json.loads(row.before_json) if row.before_json is not None else None,
+        after=json.loads(row.after_json) if row.after_json is not None else None,
+    )
+
+
+def _insert_template_audit(connection, event: TemplateAuditEvent) -> None:
+    connection.execute(insert(template_audit_events), _template_audit_values(event))
+
+
 def _save_active_decision(
     connection,
     task_id: UUID,
@@ -396,13 +430,37 @@ class SqliteTaskRepository:
             rows = connection.execute(select(tasks).order_by(tasks.c.created_at.desc(), tasks.c.id)).all()
         return tuple(_task_from_row(row) for row in rows)
 
-    def claim_execution(self, task_id: UUID, updated_at: datetime) -> ReviewTask | None:
-        """Atomically promote CREATED to FILES_STAGED; the state is the durable claim."""
+    def claim_execution(
+        self, task_id: UUID, *, now: datetime, lease_seconds: int
+    ) -> ReviewTask | None:
+        """Atomically claim a task that is either new or lease-expired.
+
+        ``CREATED`` covers the first claim. A state in
+        ``(FILES_STAGED, PARSING, PARSED, EVALUATING)`` covers an execution that
+        was interrupted mid-flight: once ``updated_at`` is older than the lease
+        the owning process is presumed dead, so the task becomes reclaimable
+        instead of being stuck forever. Claimability is decided inside this
+        single guarded UPDATE, so concurrent claimants cannot both win.
+        """
+        if lease_seconds <= 0:
+            raise ValueError("execution lease must be positive")
+        stale_before = _utc_text(now - timedelta(seconds=lease_seconds))
         with self._engine.begin() as connection:
             claimed = connection.execute(
                 update(tasks)
-                .where(tasks.c.id == str(task_id), tasks.c.state == "CREATED")
-                .values(state="FILES_STAGED", execution_claim=str(uuid4()), updated_at=_utc_text(updated_at))
+                .where(
+                    tasks.c.id == str(task_id),
+                    or_(
+                        tasks.c.state == "CREATED",
+                        and_(
+                            tasks.c.state.in_(
+                                ("FILES_STAGED", "PARSING", "PARSED", "EVALUATING")
+                            ),
+                            tasks.c.updated_at <= stale_before,
+                        ),
+                    ),
+                )
+                .values(state="FILES_STAGED", execution_claim=str(uuid4()), updated_at=_utc_text(now))
             )
             if claimed.rowcount != 1:
                 return None
@@ -454,7 +512,10 @@ class SqliteTemplateRepository:
         self._engine = engine
 
     def create(
-        self, template: TemplateVersion, rules: tuple[TemplateRule, ...]
+        self,
+        template: TemplateVersion,
+        rules: tuple[TemplateRule, ...],
+        audit_event: TemplateAuditEvent | None = None,
     ) -> TemplateVersion:
         if any(rule.template_id != template.id for rule in rules):
             raise RepositoryConflictError("every rule must belong to the template")
@@ -466,6 +527,8 @@ class SqliteTemplateRepository:
                         insert(template_rules),
                         [_template_rule_values(rule) for rule in rules],
                     )
+                if audit_event is not None:
+                    _insert_template_audit(connection, audit_event)
         except IntegrityError as error:
             raise RepositoryConflictError(
                 f"template version already exists or has invalid rules: {template.name} {template.version}"
@@ -510,7 +573,11 @@ class SqliteTemplateRepository:
             ).all()
         return tuple(_template_rule_from_row(row) for row in rows)
 
-    def update_version(self, template: TemplateVersion) -> TemplateVersion:
+    def update_version(
+        self,
+        template: TemplateVersion,
+        audit_event: TemplateAuditEvent | None = None,
+    ) -> TemplateVersion:
         current = self.get(template.id)
         if current.status is TemplateStatus.RETIRED:
             raise RepositoryConflictError("retired template is immutable")
@@ -528,6 +595,8 @@ class SqliteTemplateRepository:
                     .where(template_versions.c.id == str(template.id))
                     .values(**values)
                 )
+                if audit_event is not None:
+                    _insert_template_audit(connection, audit_event)
         except IntegrityError as error:
             raise RepositoryConflictError("template update violates a database constraint") from error
         return template
@@ -543,7 +612,11 @@ class SqliteTemplateRepository:
         if status != TemplateStatus.DRAFT.value:
             raise RepositoryConflictError("published or retired template rules are immutable")
 
-    def update_rule(self, rule: TemplateRule) -> TemplateRule:
+    def update_rule(
+        self,
+        rule: TemplateRule,
+        audit_event: TemplateAuditEvent | None = None,
+    ) -> TemplateRule:
         values = _template_rule_values(rule)
         values.pop("id")
         try:
@@ -559,20 +632,33 @@ class SqliteTemplateRepository:
                 )
                 if result.rowcount != 1:
                     raise RepositoryNotFoundError(f"template rule not found: {rule.rule_id}")
+                if audit_event is not None:
+                    _insert_template_audit(connection, audit_event)
         except IntegrityError as error:
             raise RepositoryConflictError("template rule update violates a database constraint") from error
         return rule
 
-    def add_rule(self, rule: TemplateRule) -> TemplateRule:
+    def add_rule(
+        self,
+        rule: TemplateRule,
+        audit_event: TemplateAuditEvent | None = None,
+    ) -> TemplateRule:
         try:
             with self._engine.begin() as connection:
                 self._require_draft(connection, rule.template_id)
                 connection.execute(insert(template_rules), _template_rule_values(rule))
+                if audit_event is not None:
+                    _insert_template_audit(connection, audit_event)
         except IntegrityError as error:
             raise RepositoryConflictError("template rule already exists or conflicts") from error
         return rule
 
-    def delete_rule(self, template_id: UUID, rule_id: str) -> None:
+    def delete_rule(
+        self,
+        template_id: UUID,
+        rule_id: str,
+        audit_event: TemplateAuditEvent | None = None,
+    ) -> None:
         with self._engine.begin() as connection:
             self._require_draft(connection, template_id)
             result = connection.execute(
@@ -583,6 +669,35 @@ class SqliteTemplateRepository:
             )
             if result.rowcount != 1:
                 raise RepositoryNotFoundError(f"template rule not found: {rule_id}")
+            if audit_event is not None:
+                _insert_template_audit(connection, audit_event)
+
+
+class SqliteTemplateAuditRepository:
+    """Append-only access to durable template mutation events."""
+
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
+    def create(self, event: TemplateAuditEvent) -> TemplateAuditEvent:
+        try:
+            with self._engine.begin() as connection:
+                _insert_template_audit(connection, event)
+        except IntegrityError as error:
+            raise RepositoryConflictError("template audit event violates a database constraint") from error
+        return event
+
+    def list_for_template(self, template_id: UUID) -> tuple[TemplateAuditEvent, ...]:
+        with self._engine.connect() as connection:
+            rows = connection.execute(
+                select(template_audit_events)
+                .where(template_audit_events.c.template_id == str(template_id))
+                .order_by(
+                    template_audit_events.c.occurred_at.desc(),
+                    template_audit_events.c.id.desc(),
+                )
+            ).all()
+        return tuple(_template_audit_from_row(row) for row in rows)
 
 class SqliteResultRepository:
     def __init__(self, engine: Engine) -> None:
@@ -850,6 +965,7 @@ class RepositoryBundle:
     sources: SqliteSourceFileRepository
     failures: SqliteStageFailureRepository
     templates: SqliteTemplateRepository
+    template_audits: SqliteTemplateAuditRepository
 
     @staticmethod
     def _require_complete_a11_results(task: ReviewTask, results: tuple[RuleResult, ...]) -> None:
@@ -944,4 +1060,5 @@ def repositories(database_url: str) -> RepositoryBundle:
         sources=SqliteSourceFileRepository(engine),
         failures=SqliteStageFailureRepository(engine),
         templates=SqliteTemplateRepository(engine),
+        template_audits=SqliteTemplateAuditRepository(engine),
     )

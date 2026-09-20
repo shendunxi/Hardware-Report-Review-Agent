@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Lock
 from collections.abc import Mapping
@@ -17,13 +19,24 @@ import xlwt
 from xlutils.copy import copy as copy_workbook
 
 
+STALE_WORKSPACE_ID = "9e5a1c4b-6d2f-4a71-8c30-2f5b7d18a4e2"
+
+
 class AsgiClient:
     """Small dependency-free ASGI contract client for this local service."""
 
     def __init__(self, app) -> None:
         self.app = app
 
-    def request(self, method: str, path: str, *, body: bytes = b"", headers: Mapping[str, str] = {}):
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: bytes = b"",
+        headers: Mapping[str, str] = {},
+        client_host: str = "127.0.0.1",
+    ):
         async def _call():
             messages = []
             sent = False
@@ -49,7 +62,7 @@ class AsgiClient:
                     "raw_path": path.encode(),
                     "query_string": b"",
                     "headers": [(key.lower().encode(), value.encode()) for key, value in headers.items()],
-                    "client": ("127.0.0.1", 123),
+                    "client": (client_host, 123),
                     "server": ("test", 80),
                 },
                 receive,
@@ -162,7 +175,17 @@ def client(tmp_path: Path):
     config.set_main_option("script_location", str(Path(__file__).resolve().parents[2] / "migrations"))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{database.as_posix()}")
     command.upgrade(config, "head")
-    app = create_app(Settings(database_url=f"sqlite:///{database.as_posix()}", storage_root=tmp_path / "storage", auth_mode="disabled"))
+    storage_root = tmp_path / "storage"
+    # Seed one orphaned workspace past the TTL so the startup sweep must reclaim
+    # it; on a fresh root a missing sweep call would pass unnoticed.
+    stale_workspace = storage_root / STALE_WORKSPACE_ID
+    (stale_workspace / "input").mkdir(parents=True)
+    aged = time.time() - 3 * 24 * 60 * 60
+    os.utime(stale_workspace, (aged, aged))
+    app = create_app(Settings(database_url=f"sqlite:///{database.as_posix()}", storage_root=storage_root, auth_mode="disabled"))
+    assert app.state.startup_reclamation == (STALE_WORKSPACE_ID,)
+    assert not stale_workspace.exists()
+    assert app.state.interrupted_executions == ()
     yield AsgiClient(app)
 
 
@@ -240,9 +263,11 @@ def test_task_executes_the_frozen_enabled_rule_set_after_template_retirement(
         version="A12",
         actor="模板管理员",
     )
-    service.update_rule(template.id, "TR-01", {"summary": "A12 人工复核规则"})
-    service.update_rule(template.id, "TR-02", {"enabled": False})
-    service.publish(template.id)
+    service.update_rule(
+        template.id, "TR-01", {"summary": "A12 人工复核规则"}, actor="模板管理员"
+    )
+    service.update_rule(template.id, "TR-02", {"enabled": False}, actor="模板管理员")
+    service.publish(template.id, actor="模板管理员")
 
     report = _write_xls(tmp_path / "dynamic.xls")
     created = client.post_multipart(
@@ -253,7 +278,7 @@ def test_task_executes_the_frozen_enabled_rule_set_after_template_retirement(
             ("supporting_manifest", None, "[]", None),
         ],
     ).json()
-    service.retire(template.id)
+    service.retire(template.id, actor="模板管理员")
 
     executed = client.post(f"/api/tasks/{created['id']}/execute")
     assert executed.status_code == 202

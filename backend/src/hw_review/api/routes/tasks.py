@@ -34,7 +34,7 @@ def _payload(item):
     return item.model_dump(mode="json") if hasattr(item, "model_dump") else item
 
 
-def _task_payload(task, sources=()):
+def _task_payload(service, task, sources=()):
     body = _payload(task)
     body.pop("template_source_path", None)
     body.pop("template_source_sha256", None)
@@ -44,6 +44,8 @@ def _task_payload(task, sources=()):
     except ValueError:
         body["template_rule_count"] = 0
     body["source_files"] = [_payload(source) for source in sources]
+    # Derived server-side so the UI never re-implements the execution-lease rule.
+    body["execution"] = service.execution_status(task)
     return body
 
 
@@ -132,7 +134,7 @@ async def create_task(
             template=template,
             template_rules=template_rules,
         )
-        return _task_payload(task, sources)
+        return _task_payload(_service(request), task, sources)
     finally:
         if "ingress" in locals():
             shutil.rmtree(ingress, ignore_errors=True)
@@ -157,7 +159,7 @@ async def execute_task(
 
     if owns_execution:
         background_tasks.add_task(run)
-    return _task_payload(current)
+    return _task_payload(service, current)
 
 
 @router.get("")
@@ -169,7 +171,7 @@ async def list_tasks(
     return {
         "tasks": [
             {
-                **_task_payload(task, service._bundle.sources.list_for_task(task.id)),
+                **_task_payload(service, task, service._bundle.sources.list_for_task(task.id)),
                 "stage_failures": [_payload(item) for item in service._bundle.failures.list_for_task(task.id)],
                 "rule_results": [_payload(item) for item in service._bundle.results.list_for_task(task.id)],
                 "manual_decisions": [_payload(item) for item in service._bundle.decisions.list_for_task(task.id)],
@@ -188,7 +190,7 @@ async def get_task(
 ):
     detail = _service(request).detail(_parse_id(task_id))
     return {
-        **_task_payload(detail["task"], detail["source_files"]),
+        **_task_payload(_service(request), detail["task"], detail["source_files"]),
         "template_rules": [_payload(item) for item in rules_for_task(detail["task"])],
         "stage_failures": [_payload(item) for item in detail["stage_failures"]],
         "rule_results": [_payload(item) for item in detail["rule_results"]],
@@ -241,7 +243,7 @@ async def complete_task(
     _principal: Annotated[AccessContext, Depends(require_reviewer)],
 ):
     task, revision = _service(request).complete(_parse_id(task_id))
-    return {**_task_payload(task), "revision": _payload(revision)}
+    return {**_task_payload(_service(request), task), "revision": _payload(revision)}
 
 
 @router.post("/{task_id}/reopen")
@@ -250,4 +252,5 @@ async def reopen_task(
     task_id: str,
     _principal: Annotated[AccessContext, Depends(require_reviewer)],
 ):
-    return _task_payload(_service(request).reopen(_parse_id(task_id)))
+    service = _service(request)
+    return _task_payload(service, service.reopen(_parse_id(task_id)))

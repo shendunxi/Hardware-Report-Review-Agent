@@ -1,6 +1,6 @@
 """Stable domain contracts shared across application layers."""
 
-from .enums import EvidenceKind, FileRole, FinalStatus, ReviewStatus, TaskState, TemplateStatus
+from .enums import EvidenceKind, FileRole, FinalStatus, ReviewStatus, TaskState, TemplateAuditAction, TemplateStatus
 from .models import (
     AtomicResult,
     ContentBlock,
@@ -20,6 +20,7 @@ from .models import (
     StageFailure,
     StagedFile,
     TableCell,
+    TemplateAuditEvent,
     TemplateRule,
     TemplateValidationFinding,
     TemplateVersion,
@@ -65,6 +66,8 @@ __all__ = [
     "TableCell",
     "TaskRepository",
     "TaskState",
+    "TemplateAuditAction",
+    "TemplateAuditEvent",
     "TemplateRule",
     "TemplateStatus",
     "TemplateValidationFinding",

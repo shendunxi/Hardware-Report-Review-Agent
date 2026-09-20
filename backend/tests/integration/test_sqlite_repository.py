@@ -35,6 +35,7 @@ from hw_review.persistence import (
     RepositoryConflictError,
     repositories,
 )
+from hw_review.config import get_settings
 from hw_review.persistence.tables import metadata, review_revisions, rule_results
 from hw_review.persistence.tables import manual_decisions
 
@@ -61,10 +62,14 @@ def _migrate(database_url: str) -> subprocess.CompletedProcess[str]:
 
 
 @pytest.fixture
-def db_url(tmp_path: Path) -> str:
+def db_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     database_url = _database_url(tmp_path / "review.db")
     completed = _migrate(database_url)
     assert completed.returncode == 0, completed.stdout + completed.stderr
+    # The Alembic environment already reads HW_REVIEW_DATABASE_URL; the runtime
+    # must resolve the same variable or migrations and serving could diverge.
+    monkeypatch.setenv("HW_REVIEW_DATABASE_URL", database_url)
+    assert get_settings().database_url == database_url
     return database_url
 
 
@@ -183,9 +188,10 @@ def test_migration_creates_exact_application_tables_and_alembic_version(
             "stage_failures",
             "template_versions",
             "template_rules",
+            "template_audit_events",
         }
         with bundle.engine.connect() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0003"
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0004"
     finally:
         bundle.close()
 
@@ -678,7 +684,7 @@ def test_persisted_models_reject_assignment_and_invalid_model_copy() -> None:
             model.model_copy(update={field: value})
 
 
-def test_metadata_contains_only_the_seven_application_tables() -> None:
+def test_metadata_contains_only_application_tables() -> None:
     assert set(metadata.tables) == {
         "tasks",
         "source_files",
@@ -689,6 +695,7 @@ def test_metadata_contains_only_the_seven_application_tables() -> None:
         "stage_failures",
         "template_versions",
         "template_rules",
+        "template_audit_events",
     }
 
 

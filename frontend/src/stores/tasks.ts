@@ -60,7 +60,13 @@ export const useTaskStore = defineStore('tasks', () => {
     return loadTask(taskId)
   }
 
+  /** Re-request execution for a run that was interrupted; the server decides if it runs. */
+  async function reexecute(taskId: string) {
+    await run(() => apiClient.executeTask(taskId))
+    return loadTask(taskId)
+  }
+
   function clearError() { error.value = null }
 
-  return { tasks, selected, loading, error, isSelectedTransient, loadTasks, loadTask, createAndExecute, saveDecision, complete, reopen, clearError }
+  return { tasks, selected, loading, error, isSelectedTransient, loadTasks, loadTask, createAndExecute, saveDecision, complete, reopen, reexecute, clearError }
 })

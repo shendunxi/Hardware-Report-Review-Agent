@@ -229,12 +229,46 @@ def test_template_api_upload_edit_publish_retire_and_restart(
     assert retired.status_code == 200
     assert retired.json()["status"] == "RETIRED"
 
+    audit = client.get(f"/api/templates/{template_id}/audit-events")
+    assert audit.status_code == 200
+    events = audit.json()["events"]
+    assert [event["action"] for event in events] == [
+        "TEMPLATE_RETIRED",
+        "TEMPLATE_PUBLISHED",
+        "RULE_DELETED",
+        "RULE_CREATED",
+        "RULE_UPDATED",
+        "TEMPLATE_UPLOADED",
+    ]
+    assert {event["actor"] for event in events} == {"local-review"}
+    assert [event["rule_id"] for event in events] == [
+        None,
+        None,
+        "CUSTOM-01",
+        "CUSTOM-01",
+        "TR-01",
+        None,
+    ]
+    assert events[0]["before"]["status"] == "PUBLISHED"
+    assert events[0]["after"]["status"] == "RETIRED"
+    assert events[2]["before"]["rule_id"] == "CUSTOM-01"
+    assert events[2]["after"] is None
+    assert events[3]["before"] is None
+    assert events[3]["after"]["rule_id"] == "CUSTOM-01"
+    assert events[4]["before"]["summary"] != events[4]["after"]["summary"]
+    assert all("source_path" not in json.dumps(event, ensure_ascii=False) for event in events)
+
     first_app.state.repositories.close()
     restarted = AsgiClient(create_app(app_settings))
     restored = restarted.get(f"/api/templates/{template_id}")
     assert restored.status_code == 200
     assert restored.json()["template"]["status"] == "RETIRED"
     assert len(restored.json()["rules"]) == 22
+    restored_events = restarted.get(f"/api/templates/{template_id}/audit-events")
+    assert restored_events.status_code == 200
+    assert [event["id"] for event in restored_events.json()["events"]] == [
+        event["id"] for event in events
+    ]
     restarted.app.state.repositories.close()
 
 

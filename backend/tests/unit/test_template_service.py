@@ -133,7 +133,7 @@ def test_a111_and_missing_sheet_are_persisted_as_publish_blockers(
     assert {item.code for item in a111.validation_findings if item.severity == "ERROR"} == {"INVALID_A111_VERSION"}
     assert "CHECKLIST_SHEET_MISSING" in {item.code for item in broken.validation_findings if item.severity == "ERROR"}
     with pytest.raises(TemplateServiceError) as error:
-        service.publish(a111.id)
+        service.publish(a111.id, actor="模板管理员")
     assert error.value.code == "TEMPLATE_PUBLISH_BLOCKED"
 
 
@@ -155,6 +155,7 @@ def test_draft_rule_changes_refresh_counts_and_published_version_is_immutable(
             "enabled": False,
             "main_judgment": "DISABLED",
         },
+        actor="模板管理员",
     )
     assert updated.summary == "JIRA 项目与链接检查"
     assert service.detail(draft.id)["template"].effective_rules == 20
@@ -170,18 +171,24 @@ def test_draft_rule_changes_refresh_counts_and_published_version_is_immutable(
             "confirmed_boundary": "未配置自动判定条件时进入待人工确认",
             "enabled": True,
         },
+        actor="模板管理员",
     )
     assert added.source_row is None
     assert service.detail(draft.id)["template"].effective_rules == 21
-    service.delete_rule(draft.id, "CUSTOM-01")
+    service.delete_rule(draft.id, "CUSTOM-01", actor="模板管理员")
 
-    published = service.publish(draft.id)
+    published = service.publish(draft.id, actor="模板管理员")
     assert published.status is TemplateStatus.PUBLISHED
     with pytest.raises(TemplateServiceError) as error:
-        service.update_rule(published.id, "TR-01", {"summary": "不得修改"})
+        service.update_rule(
+            published.id,
+            "TR-01",
+            {"summary": "不得修改"},
+            actor="模板管理员",
+        )
     assert error.value.code == "TEMPLATE_IMMUTABLE"
 
-    retired = service.retire(published.id)
+    retired = service.retire(published.id, actor="模板管理员")
     assert retired.status is TemplateStatus.RETIRED
     assert len(service.detail(retired.id)["rules"]) == 22
 

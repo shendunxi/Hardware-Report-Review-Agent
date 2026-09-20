@@ -14,11 +14,15 @@ from uuid import UUID, uuid4
 import pymupdf
 import pytest
 
+from hw_review.acceptance.run_samples import SAMPLE_ROOT_ENV
+from hw_review.config import get_settings
 from hw_review.domain.enums import FileRole
 from hw_review.domain.models import StagedFile
 from hw_review.parsers.doc import DocParseError, DocParser
 from hw_review.parsers.pdf import PdfParser
 from hw_review.parsers.word_worker import (
+    POLICY_ANY_WORD_COMPATIBLE,
+    POLICY_MICROSOFT_ONLY,
     ChildConversionFailure,
     ConversionArtifacts,
     WordWorker,
@@ -30,14 +34,13 @@ from hw_review.services.cleanup import WorkspaceCleaner
 from hw_review.services.staging import FileStager, fingerprint
 
 
-S06 = Path(
-    r"D:\Document\AI创新应用大赛\硬件测试报告审核智能体\硬件测试报告及检查表"
-    r"\TCY30\PP\TCY30 (903442) PP 可靠性测试报告_20260609.doc"
+# The frozen tree lives outside the repository and moves between machines, so
+# the root is supplied exactly the way the acceptance runner supplies it.
+SAMPLE_ROOT = Path(
+    os.environ.get(SAMPLE_ROOT_ENV, r"D:\Document\AI创新应用大赛\硬件测试报告及检查表")
 )
-S14 = Path(
-    r"D:\Document\AI创新应用大赛\硬件测试报告审核智能体\硬件测试报告及检查表"
-    r"\TFY03\PP\TFY03 (903047) PP 可靠性测试报告_20240920.doc"
-)
+S06 = SAMPLE_ROOT / (r"TCY30\PP\TCY30 (903442) PP 可靠性测试报告_20260609.doc")
+S14 = SAMPLE_ROOT / (r"TFY03\PP\TFY03 (903047) PP 可靠性测试报告_20240920.doc")
 
 
 def _sha(path: Path) -> str:
@@ -985,6 +988,29 @@ def test_default_parent_worker_refuses_non_microsoft_word_registration(
     assert "Microsoft Word" in str(error.value)
     assert launched == []
 
+    # The permissive policy must change only the registry guard: the same host has
+    # to reach the launch step, and the failure must no longer be reported as a
+    # missing Microsoft Word server.
+    permissive = WordWorker(policy=POLICY_ANY_WORD_COMPATIBLE)
+    attempts = []
+
+    def record_then_fail(*args, **kwargs):
+        attempts.append((args, kwargs))
+        raise OSError("injected start failure")
+
+    permissive._process_factory = record_then_fail
+    with pytest.raises(DocParseError) as permissive_error:
+        permissive.convert(staged.path, output, 30)
+
+    assert attempts
+    assert "process start failed" in str(permissive_error.value)
+    assert "Microsoft Word" not in str(permissive_error.value)
+
+    # An unrecognised policy must be rejected by construction so a bad override
+    # fails startup instead of silently degrading.
+    with pytest.raises(ValueError):
+        WordWorker(policy="not-a-policy")
+
 
 @pytest.mark.parametrize("failure_point", ["parser", "worker", "fingerprint", "assertion"])
 def test_task5_acceptance_cleanup_cannot_be_bypassed(
@@ -1051,7 +1077,10 @@ def test_real_doc_is_staged_read_only_measured_and_cleaned(sample_id: str, sourc
     task_id = uuid4()
     before = fingerprint(source)
     server = registered_word_server()
-    if not server or "winword.exe" not in server.casefold():
+    policy = get_settings().word_automation_policy
+    if policy == POLICY_MICROSOFT_ONLY and (
+        not server or "winword.exe" not in server.casefold()
+    ):
         after = fingerprint(source)
         assert after == before
         print(
@@ -1061,12 +1090,16 @@ def test_real_doc_is_staged_read_only_measured_and_cleaned(sample_id: str, sourc
                 "source_before": before,
                 "source_after": after,
                 "registered_word_server": server,
+                "word_automation_policy": policy,
                 "reason": "Microsoft Word COM server is unavailable",
             },
         )
         if work_root.exists() and not any(work_root.iterdir()):
             work_root.rmdir()
-        pytest.skip("NO-GO: Word.Application is not registered to Microsoft WINWORD.EXE")
+        pytest.skip(
+            "NO-GO: Word.Application is not registered to Microsoft WINWORD.EXE; set "
+            "HW_REVIEW_WORD_AUTOMATION_POLICY=any_word_compatible for the development channel"
+        )
     try:
         staged = FileStager(work_root).stage(
             source,
@@ -1075,7 +1108,7 @@ def test_real_doc_is_staged_read_only_measured_and_cleaned(sample_id: str, sourc
         )
         assert staged.path != source
         started = time.perf_counter()
-        document = DocParser(timeout_seconds=20 * 60).parse(staged)
+        document = DocParser(timeout_seconds=20 * 60, word_policy=policy).parse(staged)
         duration = time.perf_counter() - started
         after = fingerprint(source)
         assert after == before
@@ -1086,6 +1119,7 @@ def test_real_doc_is_staged_read_only_measured_and_cleaned(sample_id: str, sourc
         image_count = sum(block.kind == "image" for page in document.containers for block in page.blocks)
         assert text_count or any(warning.code == "IMAGE_ONLY_PAGE" for warning in document.parse_warnings)
         assert document.conversion_provenance is not None
+        assert document.conversion_provenance.automation_host
         print(
             "REAL_DOC_METRICS",
             {
@@ -1100,6 +1134,8 @@ def test_real_doc_is_staged_read_only_measured_and_cleaned(sample_id: str, sourc
                 "duration_seconds": duration,
                 "peak_memory_bytes": document.conversion_provenance.peak_memory_bytes,
                 "word_version": document.conversion_provenance.word_version,
+                "automation_host": document.conversion_provenance.automation_host,
+                "word_automation_policy": policy,
             },
         )
     finally:

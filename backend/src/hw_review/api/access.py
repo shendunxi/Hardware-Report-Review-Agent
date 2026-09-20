@@ -16,6 +16,17 @@ from fastapi import Depends, Request
 REVIEW_ROLE = "review"
 TEMPLATE_ROLE = "template"
 
+# The unauthenticated local modes are only ever legitimate from the loopback
+# interface; anything else must not be treated as a trusted caller.
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
+
+
+def is_loopback(request: Request) -> bool:
+    """Return True only when the request originates from the local machine."""
+
+    client = request.client
+    return client is not None and client.host in LOOPBACK_HOSTS
+
 
 class AccessError(Exception):
     """Stable authentication or authorization failure."""
@@ -107,6 +118,11 @@ class LocalSessionCodec:
 def require_authenticated(request: Request) -> AccessContext:
     settings = request.app.state.settings
     if settings.auth_mode == "disabled":
+        if not is_loopback(request):
+            raise AccessError(
+                "PERMISSION_DENIED",
+                "未认证的本地模式只允许从回环地址访问。",
+            )
         return AccessContext(
             actor="local-review",
             roles=frozenset({REVIEW_ROLE, TEMPLATE_ROLE}),

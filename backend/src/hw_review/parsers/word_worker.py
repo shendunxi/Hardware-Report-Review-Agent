@@ -30,6 +30,17 @@ from hw_review.domain.models import DomainModel
 from hw_review.parsers.base import ParserError
 
 
+# Converter trust policy. ``MICROSOFT_ONLY`` is the acceptance-grade default: it
+# refuses any host whose registered ``Word.Application`` server is not
+# ``winword.exe``. ``ANY_WORD_COMPATIBLE`` admits a Word-compatible host such as
+# WPS Office as a development channel only -- WPS reports the same
+# ``Application.Version`` as genuine Word (observed ``12.0``), so artifacts from
+# that policy are only distinguishable through ``automation_host``.
+POLICY_MICROSOFT_ONLY = "microsoft_only"
+POLICY_ANY_WORD_COMPATIBLE = "any_word_compatible"
+WORD_AUTOMATION_POLICIES = (POLICY_MICROSOFT_ONLY, POLICY_ANY_WORD_COMPATIBLE)
+
+
 class DocConversionError(ParserError):
     """Stable parent-side conversion failure."""
 
@@ -92,6 +103,9 @@ class ConversionArtifacts(DomainModel):
     duration_seconds: float = Field(ge=0)
     peak_memory_bytes: int = Field(ge=0)
     diagnostics: tuple[str, ...] = ()
+    # Registered ``Word.Application`` server that produced these artifacts. Empty
+    # only for evidence recorded before the converter trust policy existed.
+    automation_host: str = ""
 
 
 def registered_word_server() -> str | None:
@@ -425,10 +439,21 @@ class WordWorker:
         process_tree_terminator: Callable[[int], None] = _terminate_owned_tree,
         diagnostic_limit: int = 4096,
         attempt_id_factory: Callable[[], UUID] = uuid4,
+        policy: str = POLICY_MICROSOFT_ONLY,
     ) -> None:
+        if policy not in WORD_AUTOMATION_POLICIES:
+            raise ValueError(
+                f"unknown word automation policy: {policy!r}; "
+                f"expected one of {', '.join(WORD_AUTOMATION_POLICIES)}"
+            )
         self._python = str(python_executable or sys.executable)
         self._process_factory = process_factory
-        self._require_microsoft_word = process_factory is subprocess.Popen
+        self._policy = policy
+        # The registry guard only applies to a real launch: an injected process
+        # factory is a test double and must not depend on the host's Office.
+        self._require_microsoft_word = (
+            process_factory is subprocess.Popen and policy == POLICY_MICROSOFT_ONLY
+        )
         self._terminate = process_tree_terminator
         self._diagnostic_limit = diagnostic_limit
         self._attempt_id_factory = attempt_id_factory
@@ -472,14 +497,17 @@ class WordWorker:
         raw_output_base = _reject_reparse_components(output_dir)
         output_base = raw_output_base.resolve(strict=False)
         self._validate_target(source, output_base)
-        if self._require_microsoft_word:
-            server = registered_word_server()
-            if not server or "winword.exe" not in server.casefold():
-                raise DocConversionError(
-                    "DOC_CONVERSION_FAILED",
-                    "Microsoft Word COM server is unavailable; "
-                    f"registered Word.Application server: {server or 'none'}",
-                )
+        server = registered_word_server()
+        if self._require_microsoft_word and (
+            not server or "winword.exe" not in server.casefold()
+        ):
+            raise DocConversionError(
+                "DOC_CONVERSION_FAILED",
+                "Microsoft Word COM server is unavailable; "
+                f"registered Word.Application server: {server or 'none'}; "
+                f"set HW_REVIEW_WORD_AUTOMATION_POLICY={POLICY_ANY_WORD_COMPATIBLE} "
+                "to allow a Word-compatible host in the development channel",
+            )
         output_base.mkdir(parents=True, exist_ok=True)
         _reject_reparse_components(raw_output_base)
         if raw_output_base.resolve(strict=True) != output_base:
@@ -634,7 +662,12 @@ class WordWorker:
             ) from error
         try:
             diagnostics = (stderr or "")[-self._diagnostic_limit :]
-            artifacts = artifacts.model_copy(update={"diagnostics": (diagnostics,) if diagnostics else ()})
+            artifacts = artifacts.model_copy(
+                update={
+                    "diagnostics": (diagnostics,) if diagnostics else (),
+                    "automation_host": server or "",
+                }
+            )
             self._validate_artifacts(
                 artifacts,
                 source,

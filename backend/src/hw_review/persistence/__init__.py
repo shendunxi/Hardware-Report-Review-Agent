@@ -14,6 +14,7 @@ from .repositories import (
     SqliteSourceFileRepository,
     SqliteStageFailureRepository,
     SqliteTemplateRepository,
+    SqliteTemplateAuditRepository,
     repositories,
 )
 
@@ -31,5 +32,6 @@ __all__ = [
     "SqliteSourceFileRepository",
     "SqliteStageFailureRepository",
     "SqliteTemplateRepository",
+    "SqliteTemplateAuditRepository",
     "repositories",
 ]

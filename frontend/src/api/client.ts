@@ -6,6 +6,7 @@ import type {
   SessionContext,
   SupportingUpload,
   TemplateDetail,
+  TemplateAuditEvent,
   TemplateRule,
   TemplateSummary,
 } from '../domain/types'
@@ -104,6 +105,10 @@ export class ApiClient {
 
   getTemplate(templateId: string): Promise<TemplateDetail> {
     return this.request(`/api/templates/${encodeURIComponent(templateId)}`)
+  }
+
+  listTemplateAuditEvents(templateId: string): Promise<{ events: TemplateAuditEvent[] }> {
+    return this.request(`/api/templates/${encodeURIComponent(templateId)}/audit-events`)
   }
 
   uploadTemplate(input: { source: File; name: string; version: string }): Promise<TemplateSummary> {

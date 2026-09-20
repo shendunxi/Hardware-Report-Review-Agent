@@ -64,6 +64,8 @@ junit*.xml
 # 上传暂存、Word 转换产物、模板受管副本、pytest 临时工作区
 /backend/storage/
 /backend/.tmp/
+# 真实样本集成测试会在仓库根目录创建 .task-work/<uuid> 工作区
+/.task-work/
 # 从仓库根目录启动服务时可能落在这里
 /storage/
 

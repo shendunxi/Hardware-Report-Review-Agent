@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+from uuid import UUID
+
+from hw_review.domain import TaskState
+
 from test_task_api import AsgiClient, _write_xls, client
 
 
@@ -32,6 +37,12 @@ def test_validation_errors_use_the_frozen_error_envelope(client: AsgiClient) -> 
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "INVALID_REASON"
+
+    # auth_mode="disabled" is an authentication bypass; it must stay confined to
+    # the loopback interface instead of trusting any reachable peer.
+    denied = client.request("GET", "/api/tasks", client_host="10.0.0.7")
+    assert denied.status_code == 403
+    assert denied.json()["error"]["code"] == "PERMISSION_DENIED"
 
 
 def test_ready_only_manual_decision_uses_server_actor_and_replaces(client: AsgiClient, tmp_path) -> None:
@@ -96,6 +107,48 @@ def test_execution_failure_and_cleanup_failure_are_durable_diagnostics(client: A
     assert {(item["stage"], item["code"]) for item in failed["stage_failures"]} == {
         ("PARSING", "INJECTED_PARSE_FAILURE"), ("CLEANUP", "CLEANUP_FAILURE")
     }
+
+    # An execution interrupted by process death (no exception, no transition) must
+    # not be stuck forever: once its lease expires the claim becomes reclaimable
+    # and the rerun converges deterministically instead of polling forever.
+    monkeypatch.undo()
+    interrupted = client.post(
+        "/api/tasks",
+        files={"primary_report": ("interrupted.xls", _write_xls(tmp_path / "interrupted.xls"), "application/vnd.ms-excel")},
+    ).json()
+    interrupted_id = UUID(interrupted["id"])
+    assert service.request_execution(interrupted_id)[1] is True
+
+    claimed = service.get(interrupted_id)
+    assert claimed.state is TaskState.FILES_STAGED
+    dead = claimed.model_copy(update={"state": TaskState.PARSING})
+    service._bundle.tasks.update(dead)
+
+    # While the lease is held the task is not reclaimable: this is the exact case
+    # that used to return "no execution owned" and left the task unresolved.
+    assert service.request_execution(interrupted_id)[1] is False
+    stalled = client.get(f"/api/tasks/{interrupted['id']}").json()
+    assert stalled["state"] == "PARSING"
+    # The UI must not re-derive lease semantics: the server publishes them.
+    assert stalled["execution"]["reclaimable"] is False
+    assert stalled["execution"]["seconds_until_reclaimable"] > 0
+    assert [item["state"] for item in service.inspect_interrupted()] == ["PARSING"]
+
+    aged = dead.model_copy(
+        update={
+            "updated_at": datetime.now(timezone.utc)
+            - timedelta(seconds=service._execution_lease_seconds + 60)
+        }
+    )
+    service._bundle.tasks.update(aged)
+    assert client.post(f"/api/tasks/{interrupted['id']}/execute").status_code == 202
+
+    recovered = client.get(f"/api/tasks/{interrupted['id']}").json()
+    assert recovered["state"] == "READY_FOR_REVIEW"
+    assert len(recovered["rule_results"]) == 21
+    assert len({item["rule_id"] for item in recovered["rule_results"]}) == 21
+    assert recovered["execution"] is None
+    assert service.inspect_interrupted() == []
 
 
 def test_reopen_then_second_completion_preserves_two_immutable_snapshots(client: AsgiClient, tmp_path) -> None:

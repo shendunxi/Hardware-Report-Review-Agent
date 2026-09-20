@@ -116,13 +116,27 @@ async def get_template(
     }
 
 
+@router.get("/{template_id}/audit-events")
+async def list_template_audit_events(
+    request: Request,
+    template_id: str,
+    _principal: Annotated[AccessContext, Depends(require_template_manager)],
+):
+    return {
+        "events": [
+            _payload(item)
+            for item in _service(request).list_audit_events(_template_id(template_id))
+        ]
+    }
+
+
 @router.put("/{template_id}/rules/{rule_id}")
 async def update_template_rule(
     request: Request,
     template_id: str,
     rule_id: str,
     payload: RuleUpdatePayload,
-    _principal: Annotated[AccessContext, Depends(require_template_manager)],
+    principal: Annotated[AccessContext, Depends(require_template_manager)],
 ):
     changes = payload.model_dump(exclude_unset=True)
     if not changes:
@@ -130,7 +144,9 @@ async def update_template_rule(
             "TEMPLATE_RULE_UPDATE_INVALID", "至少提供一个需要修改的字段。"
         )
     return _payload(
-        _service(request).update_rule(_template_id(template_id), rule_id, changes)
+        _service(request).update_rule(
+            _template_id(template_id), rule_id, changes, actor=principal.actor
+        )
     )
 
 
@@ -139,11 +155,11 @@ async def add_template_rule(
     request: Request,
     template_id: str,
     payload: RuleCreatePayload,
-    _principal: Annotated[AccessContext, Depends(require_template_manager)],
+    principal: Annotated[AccessContext, Depends(require_template_manager)],
 ):
     return _payload(
         _service(request).add_rule(
-            _template_id(template_id), payload.model_dump()
+            _template_id(template_id), payload.model_dump(), actor=principal.actor
         )
     )
 
@@ -153,9 +169,11 @@ async def delete_template_rule(
     request: Request,
     template_id: str,
     rule_id: str,
-    _principal: Annotated[AccessContext, Depends(require_template_manager)],
+    principal: Annotated[AccessContext, Depends(require_template_manager)],
 ):
-    _service(request).delete_rule(_template_id(template_id), rule_id)
+    _service(request).delete_rule(
+        _template_id(template_id), rule_id, actor=principal.actor
+    )
     return Response(status_code=204)
 
 
@@ -163,15 +181,19 @@ async def delete_template_rule(
 async def publish_template(
     request: Request,
     template_id: str,
-    _principal: Annotated[AccessContext, Depends(require_template_manager)],
+    principal: Annotated[AccessContext, Depends(require_template_manager)],
 ):
-    return _payload(_service(request).publish(_template_id(template_id)))
+    return _payload(
+        _service(request).publish(_template_id(template_id), actor=principal.actor)
+    )
 
 
 @router.post("/{template_id}/retire")
 async def retire_template(
     request: Request,
     template_id: str,
-    _principal: Annotated[AccessContext, Depends(require_template_manager)],
+    principal: Annotated[AccessContext, Depends(require_template_manager)],
 ):
-    return _payload(_service(request).retire(_template_id(template_id)))
+    return _payload(
+        _service(request).retire(_template_id(template_id), actor=principal.actor)
+    )

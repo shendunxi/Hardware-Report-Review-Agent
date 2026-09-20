@@ -13,6 +13,7 @@ from hw_review.api.access import (
     LocalSessionCodec,
     REVIEW_ROLE,
     TEMPLATE_ROLE,
+    is_loopback,
     require_authenticated,
 )
 
@@ -45,8 +46,7 @@ def _payload(context: AccessContext) -> dict[str, object]:
 async def select_local_session(
     request: Request, response: Response, payload: LocalSessionPayload
 ):
-    client_host = request.client.host if request.client else None
-    if client_host not in {"127.0.0.1", "::1"}:
+    if not is_loopback(request):
         raise AccessError("PERMISSION_DENIED", "本地角色选择只允许从回环地址访问。")
     settings = request.app.state.settings
     if settings.auth_mode != "local":

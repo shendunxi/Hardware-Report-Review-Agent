@@ -15,6 +15,7 @@ from .enums import (
     FinalStatus,
     ReviewStatus,
     TaskState,
+    TemplateAuditAction,
     TemplateStatus,
 )
 from .hashing import normalized_text_hash, ordered_identity_hash
@@ -108,6 +109,11 @@ class ConversionProvenance(DomainModel):
     word_version: str = Field(min_length=1)
     duration_seconds: float = Field(ge=0)
     peak_memory_bytes: int = Field(ge=0)
+    # Registered ``Word.Application`` server that produced the artifacts. A
+    # Word-compatible host reports the same ``word_version`` as genuine Word, so
+    # this field is the only honest discriminator. Empty means the evidence was
+    # recorded before the converter trust policy existed.
+    automation_host: str = ""
 
 
 class TableCell(DomainModel):
@@ -398,6 +404,40 @@ class TemplateRule(DomainModel):
     def validate_enabled_judgment(self) -> "TemplateRule":
         if self.enabled == (self.main_judgment == "DISABLED"):
             raise ValueError("enabled and main_judgment must agree")
+        return self
+
+
+class TemplateAuditEvent(DomainModel):
+    """One append-only user-driven template mutation event."""
+
+    id: UUID
+    template_id: UUID
+    template_version: str = Field(min_length=1)
+    action: TemplateAuditAction
+    rule_id: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_-]{1,31}$")
+    actor: str = Field(min_length=1)
+    occurred_at: datetime
+    before: dict[str, JsonScalar] | None = None
+    after: dict[str, JsonScalar] | None = None
+
+    _normalize_occurred_at = field_validator("occurred_at")(_template_utc_datetime)
+
+    @model_validator(mode="after")
+    def validate_snapshots(self) -> "TemplateAuditEvent":
+        if self.before is None and self.after is None:
+            raise ValueError("an audit event requires a before or after snapshot")
+        if self.action in {
+            TemplateAuditAction.RULE_CREATED,
+            TemplateAuditAction.RULE_UPDATED,
+            TemplateAuditAction.RULE_DELETED,
+        } and self.rule_id is None:
+            raise ValueError("rule audit events require rule_id")
+        if self.action not in {
+            TemplateAuditAction.RULE_CREATED,
+            TemplateAuditAction.RULE_UPDATED,
+            TemplateAuditAction.RULE_DELETED,
+        } and self.rule_id is not None:
+            raise ValueError("template audit events cannot include rule_id")
         return self
 
 

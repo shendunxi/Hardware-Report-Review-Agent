@@ -33,7 +33,13 @@ def test_manifest_freezes_seventeen_inputs_and_fifteen_business_groups(manifest:
     assert sum(item["role"] == "TASK_PRIMARY" for item in samples) == 15
     assert sum(item["role"] == "COMPATIBILITY_ALTERNATE" for item in samples) == 2
     assert {item["id"] for item in samples if item["role"] == "COMPATIBILITY_ALTERNATE"} == {"S-07", "S-15"}
-    assert all(Path(item["absolute_path"]).suffix.lower() == item["expected_extension"] for item in samples)
+    assert all(Path(item["relative_path"]).suffix.lower() == item["expected_extension"] for item in samples)
+    # The manifest must stay machine-independent: the sample root is supplied at
+    # run time, so no entry may carry a committed absolute path.
+    assert all("absolute_path" not in item for item in samples)
+    assert all(not Path(item["relative_path"]).is_absolute() for item in samples)
+    assert all("\\" not in item["relative_path"] for item in samples)
+    assert "source_root" not in manifest
 
 
 def test_generated_evidence_preserves_every_source(sample_run: dict) -> None:

@@ -4,6 +4,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     ForeignKey,
+    Index,
     Integer,
     MetaData,
     String,
@@ -12,7 +13,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 
-from hw_review.domain.enums import FileRole, FinalStatus, ReviewStatus, TaskState, TemplateStatus
+from hw_review.domain.enums import FileRole, FinalStatus, ReviewStatus, TaskState, TemplateAuditAction, TemplateStatus
 
 
 metadata = MetaData()
@@ -222,3 +223,22 @@ template_rules = Table(
     UniqueConstraint("template_id", "rule_id", name="uq_template_rules_template_rule"),
     UniqueConstraint("template_id", "source_sequence", name="uq_template_rules_template_sequence"),
 )
+
+template_audit_events = Table(
+    "template_audit_events",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("template_id", String(36), ForeignKey("template_versions.id", ondelete="RESTRICT"), nullable=False),
+    Column("template_version", Text, nullable=False),
+    Column("action", String(32), nullable=False),
+    Column("rule_id", String(32), nullable=True),
+    Column("actor", Text, nullable=False),
+    Column("occurred_at", Text, nullable=False),
+    Column("before_json", Text, nullable=True),
+    Column("after_json", Text, nullable=True),
+    _enum_check("action", tuple(item.value for item in TemplateAuditAction), "ck_template_audit_events_action"),
+    CheckConstraint("before_json IS NOT NULL OR after_json IS NOT NULL", name="ck_template_audit_events_snapshot"),
+)
+
+Index("ix_template_audit_events_template_time", template_audit_events.c.template_id, template_audit_events.c.occurred_at)
+Index("ix_template_audit_events_template_rule", template_audit_events.c.template_id, template_audit_events.c.rule_id)

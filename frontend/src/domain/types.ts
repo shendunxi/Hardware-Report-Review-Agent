@@ -82,6 +82,12 @@ export interface StageFailure {
   occurred_at: string
 }
 
+export interface TaskExecutionStatus {
+  /** True once the execution lease expired, i.e. POST /execute will run again. */
+  reclaimable: boolean
+  seconds_until_reclaimable: number
+}
+
 export interface ReviewTask {
   id: string
   state: TaskState
@@ -92,6 +98,8 @@ export interface ReviewTask {
   template_version: string
   template_rule_count: number
   template_rules?: TemplateRule[]
+  /** Server-derived; null unless the task sits in an interrupted state. */
+  execution: TaskExecutionStatus | null
   created_at: string
   updated_at: string
   source_files: SourceFile[]
@@ -145,6 +153,28 @@ export interface TemplateRule {
 export interface TemplateDetail {
   template: TemplateSummary
   rules: TemplateRule[]
+}
+
+export type TemplateAuditAction =
+  | 'TEMPLATE_UPLOADED'
+  | 'RULE_CREATED'
+  | 'RULE_UPDATED'
+  | 'RULE_DELETED'
+  | 'TEMPLATE_PUBLISHED'
+  | 'TEMPLATE_RETIRED'
+
+export type AuditSnapshot = Record<string, string | number | boolean | null>
+
+export interface TemplateAuditEvent {
+  id: string
+  template_id: string
+  template_version: string
+  action: TemplateAuditAction
+  rule_id: string | null
+  actor: string
+  occurred_at: string
+  before: AuditSnapshot | null
+  after: AuditSnapshot | null
 }
 
 export interface SupportingUpload {

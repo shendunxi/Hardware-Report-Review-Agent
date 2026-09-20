@@ -23,5 +23,16 @@ describe('task store', () => {
     const task = await store.createAndExecute({ templateId: 'tpl', primaryReport: new File(['x'], 'report.xls'), supportingFiles: [] })
     expect(task.state).toBe('PARSING')
     expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    // A run interrupted by a process death is recoverable: re-requesting execution
+    // must reuse the same endpoint and then reload the task.
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 't1', state: 'FILES_STAGED' }), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 't1', state: 'READY_FOR_REVIEW', execution: null }), { status: 200 }))
+    const recovered = await store.reexecute('t1')
+    expect(recovered.state).toBe('READY_FOR_REVIEW')
+    expect(recovered.execution).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain('/api/tasks/t1/execute')
   })
 })

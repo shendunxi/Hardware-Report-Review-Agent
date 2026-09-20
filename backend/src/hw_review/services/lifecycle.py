@@ -34,8 +34,18 @@ _NEXT = {
 class LifecycleService:
     """Owns task creation, ordered execution, manual review, completion and reopen."""
 
-    def __init__(self, bundle, stager: FileStager, evaluator: EvaluationService, cleaner: WorkspaceCleaner) -> None:
+    def __init__(
+        self,
+        bundle,
+        stager: FileStager,
+        evaluator: EvaluationService,
+        cleaner: WorkspaceCleaner,
+        execution_lease_seconds: int = 1800,
+    ) -> None:
+        if execution_lease_seconds <= 0:
+            raise ValueError("execution lease must be positive")
         self._bundle, self._stager, self._evaluator, self._cleaner = bundle, stager, evaluator, cleaner
+        self._execution_lease_seconds = execution_lease_seconds
 
     @staticmethod
     def _now() -> datetime:
@@ -90,8 +100,67 @@ class LifecycleService:
             return task, False
         if task.state is TaskState.FAILED:
             raise LifecycleError("INVALID_TASK_STATE", "failed tasks require a new upload", {"state": task.state.value})
-        claimed = self._bundle.tasks.claim_execution(task_id, self._now())
+        claimed = self._bundle.tasks.claim_execution(
+            task_id, now=self._now(), lease_seconds=self._execution_lease_seconds
+        )
         return (claimed or self.get(task_id)), claimed is not None
+
+    _INTERRUPTED_STATES = frozenset(
+        {
+            TaskState.FILES_STAGED,
+            TaskState.PARSING,
+            TaskState.PARSED,
+            TaskState.EVALUATING,
+        }
+    )
+
+    def execution_status(
+        self, task: ReviewTask, now: datetime | None = None
+    ) -> dict | None:
+        """Report whether an interrupted execution may be reclaimed. Read-only.
+
+        This is the single implementation of the lease arithmetic: the API payload
+        and ``inspect_interrupted`` both read it, so no client has to re-derive the
+        rule for itself.
+        """
+
+        if task.state not in self._INTERRUPTED_STATES:
+            return None
+        moment = now or self._now()
+        remaining = max(
+            0.0,
+            self._execution_lease_seconds - (moment - task.updated_at).total_seconds(),
+        )
+        return {
+            "reclaimable": remaining <= 0,
+            "seconds_until_reclaimable": int(remaining),
+        }
+
+    def inspect_interrupted(self, now: datetime | None = None) -> list[dict]:
+        """Report executions that were interrupted. Performs no writes.
+
+        Startup must not silently rewrite task state, because in a multi-worker
+        deployment a peer may still own the task. The abandoned claim is only
+        surfaced here, and becomes reclaimable on its own once the lease expires.
+        """
+
+        moment = now or self._now()
+        interrupted: list[dict] = []
+        for task in self._bundle.tasks.list_recent():
+            status = self.execution_status(task, moment)
+            if status is None:
+                continue
+            interrupted.append(
+                {
+                    "task_id": task.id,
+                    "state": task.state.value,
+                    "seconds_since_progress": round(
+                        (moment - task.updated_at).total_seconds(), 3
+                    ),
+                    "seconds_until_reclaimable": status["seconds_until_reclaimable"],
+                }
+            )
+        return interrupted
 
     def execute(self, task_id: UUID) -> ReviewTask:
         task, claimed = self.request_execution(task_id)

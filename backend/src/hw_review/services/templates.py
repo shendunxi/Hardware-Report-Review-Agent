@@ -14,6 +14,8 @@ import xlrd
 from pydantic import ValidationError
 
 from hw_review.domain import (
+    TemplateAuditAction,
+    TemplateAuditEvent,
     TemplateRule,
     TemplateStatus,
     TemplateValidationFinding,
@@ -299,8 +301,17 @@ class TemplateService:
                 updated_at=now,
                 published_at=None,
             )
+            event = TemplateAuditEvent(
+                id=uuid4(),
+                template_id=template.id,
+                template_version=template.version,
+                action=TemplateAuditAction.TEMPLATE_UPLOADED,
+                actor=actor,
+                occurred_at=now,
+                after=self._template_snapshot(template),
+            )
             return self._bundle.templates.create(
-                template, self._baseline_rules(template_id, now)
+                template, self._baseline_rules(template_id, now), event
             )
         except Exception:
             shutil.rmtree(destination_dir, ignore_errors=True)
@@ -317,6 +328,13 @@ class TemplateService:
             }
         except RepositoryNotFoundError as error:
             raise TemplateServiceError("TEMPLATE_NOT_FOUND", "模板版本不存在。") from error
+
+    def list_audit_events(self, template_id: UUID) -> tuple[TemplateAuditEvent, ...]:
+        try:
+            self._bundle.templates.get(template_id)
+        except RepositoryNotFoundError as error:
+            raise TemplateServiceError("TEMPLATE_NOT_FOUND", "模板版本不存在。") from error
+        return self._bundle.template_audits.list_for_template(template_id)
 
     def published_binding(
         self, template_id: UUID | None
@@ -338,10 +356,16 @@ class TemplateService:
         return template, rules
 
     def update_rule(
-        self, template_id: UUID, rule_id: str, changes: dict[str, object]
+        self,
+        template_id: UUID,
+        rule_id: str,
+        changes: dict[str, object],
+        *,
+        actor: str,
     ) -> TemplateRule:
         template = self._require_draft(template_id)
         rule = self._find_rule(template_id, rule_id)
+        trusted_actor = self._trusted_actor(actor)
         allowed = {
             "summary",
             "verifiable_requirement",
@@ -362,10 +386,22 @@ class TemplateService:
             normalized["main_judgment"] = "DISABLED"
         if normalized.get("enabled") is True and rule.main_judgment == "DISABLED" and "main_judgment" not in normalized:
             normalized["main_judgment"] = "MANUAL"
-        normalized["updated_at"] = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+        normalized["updated_at"] = now
         try:
             updated = rule.model_copy(update=normalized)
-            self._bundle.templates.update_rule(updated)
+            event = TemplateAuditEvent(
+                id=uuid4(),
+                template_id=template.id,
+                template_version=template.version,
+                action=TemplateAuditAction.RULE_UPDATED,
+                rule_id=rule.rule_id,
+                actor=trusted_actor,
+                occurred_at=now,
+                before=self._rule_snapshot(rule),
+                after=self._rule_snapshot(updated),
+            )
+            self._bundle.templates.update_rule(updated, event)
         except (ValidationError, RepositoryConflictError) as error:
             raise TemplateServiceError(
                 "TEMPLATE_RULE_UPDATE_INVALID", "规则修改不符合约束。"
@@ -373,8 +409,15 @@ class TemplateService:
         self._refresh_draft(template)
         return updated
 
-    def add_rule(self, template_id: UUID, payload: dict[str, object]) -> TemplateRule:
+    def add_rule(
+        self,
+        template_id: UUID,
+        payload: dict[str, object],
+        *,
+        actor: str,
+    ) -> TemplateRule:
         template = self._require_draft(template_id)
+        trusted_actor = self._trusted_actor(actor)
         rules = self._bundle.templates.list_rules(template_id)
         now = datetime.now(timezone.utc)
         try:
@@ -387,7 +430,17 @@ class TemplateService:
                 updated_at=now,
                 **payload,
             )
-            self._bundle.templates.add_rule(rule)
+            event = TemplateAuditEvent(
+                id=uuid4(),
+                template_id=template.id,
+                template_version=template.version,
+                action=TemplateAuditAction.RULE_CREATED,
+                rule_id=rule.rule_id,
+                actor=trusted_actor,
+                occurred_at=now,
+                after=self._rule_snapshot(rule),
+            )
+            self._bundle.templates.add_rule(rule, event)
         except (TypeError, ValidationError, RepositoryConflictError) as error:
             raise TemplateServiceError(
                 "TEMPLATE_RULE_INVALID", "新增规则不符合约束或编号已存在。"
@@ -395,16 +448,30 @@ class TemplateService:
         self._refresh_draft(template)
         return rule
 
-    def delete_rule(self, template_id: UUID, rule_id: str) -> None:
+    def delete_rule(self, template_id: UUID, rule_id: str, *, actor: str) -> None:
         template = self._require_draft(template_id)
+        trusted_actor = self._trusted_actor(actor)
+        rule = self._find_rule(template_id, rule_id)
+        now = datetime.now(timezone.utc)
+        event = TemplateAuditEvent(
+            id=uuid4(),
+            template_id=template.id,
+            template_version=template.version,
+            action=TemplateAuditAction.RULE_DELETED,
+            rule_id=rule.rule_id,
+            actor=trusted_actor,
+            occurred_at=now,
+            before=self._rule_snapshot(rule),
+        )
         try:
-            self._bundle.templates.delete_rule(template_id, rule_id)
+            self._bundle.templates.delete_rule(template_id, rule_id, event)
         except RepositoryNotFoundError as error:
             raise TemplateServiceError("TEMPLATE_RULE_NOT_FOUND", "规则不存在。") from error
         self._refresh_draft(template)
 
-    def publish(self, template_id: UUID) -> TemplateVersion:
+    def publish(self, template_id: UUID, *, actor: str) -> TemplateVersion:
         template = self._require_draft(template_id)
+        trusted_actor = self._trusted_actor(actor)
         template = self._refresh_draft(template)
         blockers = tuple(
             item for item in template.validation_findings if item.severity == "ERROR"
@@ -423,9 +490,19 @@ class TemplateService:
                 "published_at": now,
             }
         )
-        return self._bundle.templates.update_version(published)
+        event = TemplateAuditEvent(
+            id=uuid4(),
+            template_id=template.id,
+            template_version=template.version,
+            action=TemplateAuditAction.TEMPLATE_PUBLISHED,
+            actor=trusted_actor,
+            occurred_at=now,
+            before=self._template_snapshot(template),
+            after=self._template_snapshot(published),
+        )
+        return self._bundle.templates.update_version(published, event)
 
-    def retire(self, template_id: UUID) -> TemplateVersion:
+    def retire(self, template_id: UUID, *, actor: str) -> TemplateVersion:
         try:
             template = self._bundle.templates.get(template_id)
         except RepositoryNotFoundError as error:
@@ -434,13 +511,25 @@ class TemplateService:
             raise TemplateServiceError(
                 "TEMPLATE_STATE_INVALID", "只有已发布模板可以停用。"
             )
+        trusted_actor = self._trusted_actor(actor)
+        now = datetime.now(timezone.utc)
         retired = template.model_copy(
             update={
                 "status": TemplateStatus.RETIRED,
-                "updated_at": datetime.now(timezone.utc),
+                "updated_at": now,
             }
         )
-        return self._bundle.templates.update_version(retired)
+        event = TemplateAuditEvent(
+            id=uuid4(),
+            template_id=template.id,
+            template_version=template.version,
+            action=TemplateAuditAction.TEMPLATE_RETIRED,
+            actor=trusted_actor,
+            occurred_at=now,
+            before=self._template_snapshot(template),
+            after=self._template_snapshot(retired),
+        )
+        return self._bundle.templates.update_version(retired, event)
 
     def _require_draft(self, template_id: UUID) -> TemplateVersion:
         try:
@@ -497,6 +586,39 @@ class TemplateService:
             }
         )
         return self._bundle.templates.update_version(refreshed)
+
+    @staticmethod
+    def _trusted_actor(actor: str) -> str:
+        trusted = actor.strip()
+        if not trusted:
+            raise TemplateServiceError("AUTHENTICATION_REQUIRED", "模板操作人不能为空。")
+        return trusted
+
+    @staticmethod
+    def _template_snapshot(template: TemplateVersion) -> dict[str, object]:
+        return {
+            "name": template.name,
+            "version": template.version,
+            "status": template.status.value,
+            "source_filename": template.source_filename,
+            "source_sha256": template.source_sha256,
+            "source_rows": template.source_rows,
+            "effective_rules": template.effective_rules,
+        }
+
+    @staticmethod
+    def _rule_snapshot(rule: TemplateRule) -> dict[str, object]:
+        return {
+            "rule_id": rule.rule_id,
+            "source_row": rule.source_row,
+            "source_sequence": rule.source_sequence,
+            "summary": rule.summary,
+            "verifiable_requirement": rule.verifiable_requirement,
+            "required_materials": rule.required_materials,
+            "main_judgment": rule.main_judgment,
+            "confirmed_boundary": rule.confirmed_boundary,
+            "enabled": rule.enabled,
+        }
 
     @staticmethod
     def _baseline_rules(template_id: UUID, timestamp: datetime) -> tuple[TemplateRule, ...]:
