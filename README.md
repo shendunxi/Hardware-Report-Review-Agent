@@ -53,29 +53,42 @@
 
 ## 当前状态与能力边界
 
-> **整体发布决策：NO-GO**（不代表系统不可用，而是「尚未完成真实样本全格式覆盖」）
+> **A11 本地纵向切片发布门禁：GO**（运行 `20260920T072513Z`，2026-09-20）
 
-依据 [`docs/evidence/a11-local-vertical-slice/release-gates.md`](docs/evidence/a11-local-vertical-slice/release-gates.md)：
+依据 [`docs/evidence/a11-acceptance-2026-09-20/`](docs/evidence/a11-acceptance-2026-09-20/)（17 份真实样本）：
 
 | 门禁 | 决策 | 说明 |
 |---|---|---|
 | G1 源文件保护 | **GO** | 17/17 指纹未变化，全程只读 |
-| G2 可读性 | **NO-GO** | 15/17 解析成功（DOCX/XLSX 缺真实样本验收证据） |
-| G3 结构完整性 | **NO-GO** | 依赖 G2 |
+| G2 可读性 | **GO** | 17/17 解析成功 |
+| G3 结构完整性 | **GO** | 17/17 归一化结构完整 |
 | G4 规则完整性 | **GO** | 15/15 任务组均产出 21 项结果 |
 | G5 可追溯性 | **GO** | 每个不符合项有证据或缺失材料；每个待确认项有未决原因 |
-| G6 生命周期 | **GO** | 后端 303 passed / 8 skipped，前端 51 passed |
+| G6 生命周期 | **GO** | 后端 313 passed / 6 skipped（带日期的补充证据） |
 | G7 性能 | **GO** | 单文件解析 + 规则判定均 ≤ 1200 秒 |
-| G8 界面 | **GO** | 真实浏览器流程 + 1440×900 / 1280×720 / 760×900 |
+| G8 界面 | **GO** | 真实 Chrome 三视口流程（自动化证据，该口径已由项目负责人接受） |
 
-**已单独 GO 的子切片**（不改变整体 NO-GO）：A11 已填检查表导出、持久化模板管理、动态任务模板绑定。
+### 这个 GO 的四个前提 —— 它不等于「可以上线」
 
-**尚未实现或未验证**：
+1. **G2/G3 只成立于开发通道**：本机没有 genuine Microsoft Word，本次运行使用
+   `HW_REVIEW_WORD_AUTOMATION_POLICY=any_word_compatible`（WPS）。该策略在代码中被定义为
+   **开发通道**，其产物不是验收级证据，且已证实会对图片做**有损重编码**
+   （[`docs/evidence/word-automation-policy/`](docs/evidence/word-automation-policy/verification.md)）。
+   换成默认 `microsoft_only`，同一份样本立刻回到 15/17（G2/G3 = NO-GO）。
+2. **DOCX / XLSX 不在覆盖范围内**：本期输入格式收敛为 XLS / DOC / PDF，这两种格式**不声明兼容**（PRD OQ-07）。
+3. **G7 的判据远松于 PRD**：门禁是「单文件 ≤ 1200 秒」；PRD 的正式指标是
+   **单任务 P95 ≤ 20 分钟 + 并发 `C=5`**，该指标**从未测量**。
+4. **G6 / G8 来自补充证据**：G6 是带日期的后端回归结果；G8 是**自动化**浏览器证据
+   （项目负责人于 2026-09-20 接受该口径），**未做人工视觉验收**。
 
-- ⚠️ **生产身份认证** —— 角色已由签名 Cookie + 服务端路由权限强制执行，但**企业微信 / OIDC / LDAP / SSO 尚未接入**，本地会话仅限回环地址，生产认证门禁仍为 **NO-GO**
+### 仍未实现或未验证（不因上述 GO 而改变）
+
+- ⚠️ **生产身份认证** —— 角色已由签名 Cookie + 服务端路由权限强制执行，但**企业微信 / OIDC / LDAP / SSO 尚未接入**，本地会话仅限回环地址
 - ❌ 真实大模型调用、OCR
-- ❌ 生产数据库选型（当前仅 SQLite）
-- ⚠️ DOC 解析默认只接受**真实 Microsoft Word**。仅有 WPS 的主机需显式设置 `HW_REVIEW_WORD_AUTOMATION_POLICY=any_word_compatible` 才能转换，且该通道**不是验收级证据**（见「配置」）
+- ❌ 生产数据库选型（当前仅 SQLite）、备份恢复、并发验证
+- ❌ 真实 Office / WPS 导出兼容验收、生产数据保留制度
+- ⚠️ 已知残留缺陷：`/favicon.ico` 返回 404；角色不跨整页刷新持久化（客户端路由不受影响）
+- ⚠️ DOC 解析默认只接受**真实 Microsoft Word**；仅有 WPS 的主机需显式设置 `HW_REVIEW_WORD_AUTOMATION_POLICY=any_word_compatible`（见「配置」）
 
 ---
 
@@ -362,7 +375,8 @@ $env:HW_REVIEW_SAMPLE_ROOT = "D:\Document\AI创新应用大赛\硬件测试报�
 
 > 早期版本把这两项实现为「去历史 task 报告里搜 `"274 passed"`、`"1440x900"` 等子串」。
 > 那让门禁与当前代码完全解耦：测试全挂、从未启动浏览器，也照样报 GO。
-> 现改为对无法判定的门禁**弃权**，并已按此重跑（G8 如实为 NO-GO）。详见
+> 现改为对无法判定的门禁**弃权**，并已按此重跑：G8 先如实报 NO-GO，
+> 修复 760px 自适应缺陷后由真实浏览器证据转为 GO。详见
 > [`docs/evidence/a11-acceptance-2026-09-20/verification.md`](docs/evidence/a11-acceptance-2026-09-20/verification.md)。
 
 > **前置条件**：样本根中必须存在 manifest 里那 17 个 `relative_path`。

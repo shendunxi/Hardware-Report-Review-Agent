@@ -1,0 +1,138 @@
+{
+  "base": "http://127.0.0.1:8766",
+  "chrome": "Chrome/135.0.7049.85",
+  "viewports": [
+    {
+      "viewport": "1440x900",
+      "steps": [
+        {
+          "step": "dashboard loaded + local session",
+          "detail": "tester"
+        },
+        {
+          "step": "sidebar nav labels rendered",
+          "detail": "[\"审核工作台\",\"审核任务\",\"创建任务\"]"
+        },
+        {
+          "step": "role switch tester -> combined",
+          "detail": "nav=[\"审核工作台\",\"审核任务\",\"创建任务\",\"模板管理\"]"
+        },
+        {
+          "step": "template list rendered",
+          "detail": "items=1"
+        },
+        {
+          "step": "template detail + audit timeline",
+          "detail": "timelineVisible=true"
+        },
+        {
+          "step": "role switch combined -> tester",
+          "detail": "leftTemplatePage=true now=/ templatesNavVisible=false"
+        },
+        {
+          "step": "task list reached as tester",
+          "detail": "table rendered"
+        },
+        {
+          "step": "horizontal overflow",
+          "detail": "{\"scrollWidth\":1440,\"clientWidth\":1440,\"overflowing\":[],\"overflowingCount\":0}"
+        },
+        {
+          "step": "screenshot",
+          "detail": "1440x900.png 60 KiB"
+        }
+      ]
+    },
+    {
+      "viewport": "1280x720",
+      "steps": [
+        {
+          "step": "dashboard loaded + local session",
+          "detail": "tester"
+        },
+        {
+          "step": "sidebar nav labels rendered",
+          "detail": "[\"审核工作台\",\"审核任务\",\"创建任务\"]"
+        },
+        {
+          "step": "role switch tester -> combined",
+          "detail": "nav=[\"审核工作台\",\"审核任务\",\"创建任务\",\"模板管理\"]"
+        },
+        {
+          "step": "template list rendered",
+          "detail": "items=1"
+        },
+        {
+          "step": "template detail + audit timeline",
+          "detail": "timelineVisible=true"
+        },
+        {
+          "step": "role switch combined -> tester",
+          "detail": "leftTemplatePage=true now=/ templatesNavVisible=false"
+        },
+        {
+          "step": "task list reached as tester",
+          "detail": "table rendered"
+        },
+        {
+          "step": "horizontal overflow",
+          "detail": "{\"scrollWidth\":1280,\"clientWidth\":1280,\"overflowing\":[],\"overflowingCount\":0}"
+        },
+        {
+          "step": "screenshot",
+          "detail": "1280x720.png 58 KiB"
+        }
+      ]
+    },
+    {
+      "viewport": "760x900",
+      "steps": [
+        {
+          "step": "dashboard loaded + local session",
+          "detail": "tester"
+        },
+        {
+          "step": "sidebar nav labels rendered",
+          "detail": "[\"工作台\",\"任务\",\"新建\"]"
+        },
+        {
+          "step": "role switch tester -> combined",
+          "detail": "nav=[\"工作台\",\"任务\",\"新建\",\"模板\"]"
+        },
+        {
+          "step": "template list rendered",
+          "detail": "items=1"
+        },
+        {
+          "step": "template detail + audit timeline",
+          "detail": "timelineVisible=true"
+        },
+        {
+          "step": "role switch combined -> tester",
+          "detail": "leftTemplatePage=true now=/ templatesNavVisible=false"
+        },
+        {
+          "step": "task list reached as tester",
+          "detail": "table rendered"
+        },
+        {
+          "step": "horizontal overflow",
+          "detail": "{\"scrollWidth\":760,\"clientWidth\":760,\"overflowing\":[{\"tag\":\"table\",\"cls\":\"\",\"right\":867},{\"tag\":\"thead\",\"cls\":\"\",\"right\":867},{\"tag\":\"tr\",\"cls\":\"\",\"right\":867},{\"tag\":\"th\",\"cls\":\"\",\"right\":867},{\"tag\":\"tbody\",\"cls\":\"\",\"right\":867}],\"overflowingCount\":11}"
+        },
+        {
+          "step": "screenshot",
+          "detail": "760x900.png 42 KiB"
+        }
+      ]
+    }
+  ],
+  "observations": [],
+  "console_events": [
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "url": "http://127.0.0.1:8766/favicon.ico"
+    }
+  ],
+  "page_errors": []
+}

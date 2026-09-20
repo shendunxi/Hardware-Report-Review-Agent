@@ -1,6 +1,6 @@
 # A11 local vertical-slice release gates
 
-Overall: **NO-GO**
+Overall: **GO**
 
 | Gate | Decision | Evidence |
 |---|---|---|
@@ -11,7 +11,7 @@ Overall: **NO-GO**
 | G5 Traceability | **GO** | every hard failure has evidence/missing material and every pending item has an unresolved reason |
 | G6 Lifecycle | **GO** | backend suite passed=313 failed=0 skipped=6 recorded_at=2026-09-20T06:27:53+00:00; supplementary gate evidence accepted |
 | G7 Performance | **GO** | all measured file parse + selected rule durations are <= 1200 seconds |
-| G8 UI | **NO-GO** | browser_verified=False recorded_at=None missing viewports=['1280x720', '1440x900', '760x900']; supplementary gate evidence accepted |
+| G8 UI | **GO** | browser_verified=True recorded_at=2026-09-20T07:25:00+00:00 missing viewports=none; supplementary gate evidence accepted |
 
 Machine-readable evidence: [sample-results.json](sample-results.json)  
 Human-readable matrix: [sample-results.md](sample-results.md)  

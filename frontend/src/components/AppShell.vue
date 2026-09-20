@@ -25,13 +25,13 @@ async function changeRole(event: Event) {
       <nav aria-label="主导航">
         <template v-if="session.canReview">
           <span class="nav-section-label">审核流程</span>
-          <RouterLink to="/">审核工作台</RouterLink>
-          <RouterLink to="/tasks">审核任务</RouterLink>
-          <RouterLink to="/tasks/new">创建任务</RouterLink>
+          <RouterLink to="/"><span class="nav-full">审核工作台</span><span class="nav-short">工作台</span></RouterLink>
+          <RouterLink to="/tasks"><span class="nav-full">审核任务</span><span class="nav-short">任务</span></RouterLink>
+          <RouterLink to="/tasks/new"><span class="nav-full">创建任务</span><span class="nav-short">新建</span></RouterLink>
         </template>
         <template v-if="session.canManageTemplates">
           <span class="nav-section-label">模板规则</span>
-          <RouterLink to="/templates">模板管理</RouterLink>
+          <RouterLink to="/templates"><span class="nav-full">模板管理</span><span class="nav-short">模板</span></RouterLink>
         </template>
       </nav>
       <div class="vue-boundary-note">本地真实 API<br><small>本地会话 · 服务端权限校验</small></div>

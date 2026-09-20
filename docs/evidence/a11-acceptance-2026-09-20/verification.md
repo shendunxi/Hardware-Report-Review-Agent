@@ -2,7 +2,7 @@
 
 本目录是 2026-09-20 两次完整 `run_samples` 运行的产物，**未覆盖** 2026-09-11 的历史证据
 （[`../a11-local-vertical-slice/`](../a11-local-vertical-slice/) 按 spec §8 保留原样）。
-最终一次为 `run_id = 20260920T062808Z`。
+最终一次为 `run_id = 20260920T072513Z`。
 
 ## 1. 运行命令与环境
 
@@ -22,7 +22,7 @@ python -m hw_review.acceptance.run_samples `
 `--sample-root` 传的是**相对路径** `backend/.tmp/samples`，它是指向冻结样本树的目录 junction。
 这样写的原因见第 4 节：runner 按设计「记录调用方提供的原值」，传绝对路径会把本机路径写进证据。
 
-## 2. 结果：整体 NO-GO
+## 2. 结果：整体 GO
 
 | 门禁 | 结论 | 证据来源 |
 |---|---|---|
@@ -33,9 +33,13 @@ python -m hw_review.acceptance.run_samples `
 | G5 Traceability | **GO** | 本次运行计算 |
 | G6 Lifecycle | **GO** | [`../gate-evidence/gates.json`](../gate-evidence/gates.json) — `passed=313 failed=0 skipped=6 recorded_at=2026-09-20T06:27:53+00:00` |
 | G7 Performance | **GO** | 本次运行计算 — 全部 ≤1200 秒 |
-| G8 UI | **NO-GO** | 同一证据文件 — `browser_verified=False`，缺少 `1440x900` / `1280x720` / `760x900` |
+| G8 UI | **GO** | 同一证据文件 — `browser_verified=true`，三视口齐备；真实浏览器证据见 [`../a11-browser-verification-2026-09-20/`](../a11-browser-verification-2026-09-20/) |
 
-**整体发布决策：NO-GO。** G8 如实失败，而不是像上一版那样由历史文档的字符串凑出 GO。
+**整体发布决策：GO**（`run_id = 20260920T072513Z`，退出码 `0`）。
+
+G1–G5、G7 由本次运行直接计算；G6、G8 来自结构化、带日期的补充证据
+[`../gate-evidence/gates.json`](../gate-evidence/gates.json)，
+不再是对历史文档做子串匹配的结果。
 
 产物中的 `word_automation_policy = any_word_compatible` 使这份结果自带限定：
 G2/G3 的 GO 成立在 **WPS 开发通道** 上。换回默认 `microsoft_only`，同一台机器同一份样本
@@ -180,8 +184,9 @@ G8   : NO-GO  browser_verified=False recorded_at=None missing viewports=[...]
 
 ## 8. 未关闭项
 
-- **G8 仍为 NO-GO**：本轮没有执行任何真实浏览器会话。17 个前端单测不构成浏览器验证，
-  因此 G8 必须保持 NO-GO，直到有人真正跑一次并把它记入证据文件。
+- **G8 的 GO 建立在自动化浏览器证据上**，该口径由项目负责人于 2026-09-20 明确接受。
+  证据是真实 Chrome 在三个视口下的完整流程，**未做人工视觉验收**。
+  残留项：`/favicon.ico` 返回 404；角色不跨整页刷新持久化（客户端路由不受影响）。
 - G7 的判据是「单文件 ≤1200 秒」，远松于 PRD 的「单任务 P95 ≤20 分钟 + 并发 C=5」。
   并发下的 P95 **从未测量**，G7 的 GO 不能替代该验收。
 - 未安装 genuine Microsoft Word；`microsoft_only` 策略在本机仍无法跑通 DOC。

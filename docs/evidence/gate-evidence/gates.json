@@ -12,9 +12,10 @@
     "note": "Default converter policy. The 6 skips are 2 opt-in release-gate assertions plus 4 environment limits: 2 need SeCreateSymbolicLinkPrivilege and 2 need genuine Microsoft Word."
   },
   "ui": {
-    "browser_verified": false,
-    "viewports": [],
-    "recorded_at": null,
-    "note": "No real browser session has been executed. The 17 frontend unit tests are not a substitute for browser verification, so G8 must stay NO-GO."
+    "browser_verified": true,
+    "viewports": ["1440x900", "1280x720", "760x900"],
+    "recorded_at": "2026-09-20T07:25:00+00:00",
+    "evidence": "docs/evidence/a11-browser-verification-2026-09-20/after-fix/",
+    "note": "Attested by the project owner on 2026-09-20, accepting automated real-browser evidence for G8. Chrome 135.0.7049.85 drove the live app at all three viewports: role switch, client-side routing to the template list, template detail with the audit timeline visible, the server-enforced role boundary, and the task list. Document-level horizontal overflow is 0 at every viewport after the responsive fix recorded in that directory's before-fix/ baseline. Frontend suite: 17 passed, typecheck and production build pass. Known and accepted residual items: /favicon.ico returns 404, and the selected role is not preserved across a full page reload (client-side routing is unaffected). No human visual acceptance was performed."
   }
 }
