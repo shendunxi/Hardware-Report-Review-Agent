@@ -25,6 +25,7 @@ from hw_review.services.a11_export import A11ChecklistExportService, A11Checklis
 from hw_review.services.evaluation import EvaluationService
 from hw_review.services.lifecycle import LifecycleError, LifecycleService
 from hw_review.services.parsing import ParserRegistry
+from hw_review.services.semantic_judge import OpenAiCompatSemanticJudge
 from hw_review.services.staging import FileStager
 from hw_review.services.templates import TemplateService, TemplateServiceError
 
@@ -83,6 +84,31 @@ def _report_interrupted_executions(lifecycle: LifecycleService) -> tuple[dict, .
     return tuple(interrupted)
 
 
+def _semantic_judge(settings: Settings):
+    """Build the semantic judge only when it is explicitly authorized.
+
+    A disabled judge means the semantic rules keep their manual fallback and no
+    report content ever leaves the machine.
+    """
+
+    if not settings.llm_enabled:
+        return None
+    judge = OpenAiCompatSemanticJudge(
+        base_url=settings.llm_base_url,
+        api_key=settings.llm_api_key,
+        model=settings.llm_model,
+        timeout_seconds=settings.llm_timeout_seconds,
+        max_tokens=settings.llm_max_tokens,
+        max_evidence_lines=settings.llm_max_evidence_lines,
+    )
+    _LOGGER.warning(
+        "semantic judgement ENABLED: report text will be sent to %s (model %s)",
+        settings.llm_base_url,
+        settings.llm_model,
+    )
+    return judge
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     if settings.auth_mode not in {"local", "disabled"}:
@@ -108,6 +134,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             ),
             A11Engine(),
+            judge=_semantic_judge(settings),
+            llm_scope=settings.llm_scope,
         ),
         cleaner,
         execution_lease_seconds=settings.execution_lease_seconds,

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from .enums import EvidenceKind
 
 if TYPE_CHECKING:
+    from ..services.semantic_judge import JudgeOutcome, JudgeRequest
     from .models import EvidenceLocator
 
 
@@ -77,3 +78,15 @@ class DocumentQuery(Protocol):
     ) -> dict[str, EvidenceLocator]: ...
 
     def has_evidence_kind(self, kind: EvidenceKind) -> bool: ...
+
+
+@runtime_checkable
+class SemanticJudge(Protocol):
+    """Decide semantic rules from a normalized report with locally-mapped evidence.
+
+    Implementations must never raise for an individual rule: a failed call has to
+    degrade that rule to ``NEEDS_REVIEW`` so an unverifiable verdict is never
+    reported as compliance.
+    """
+
+    def judge(self, request: JudgeRequest) -> JudgeOutcome: ...

@@ -84,7 +84,8 @@
 ### 仍未实现或未验证（不因上述 GO 而改变）
 
 - ⚠️ **生产身份认证** —— 角色已由签名 Cookie + 服务端路由权限强制执行，但**企业微信 / OIDC / LDAP / SSO 尚未接入**，本地会话仅限回环地址
-- ❌ 真实大模型调用、OCR
+- ⚠️ **真实大模型判定** —— 已实现并实测（含 16 条降级路径、12 条合并策略验证），但**默认关闭**；生产启用前需完成 PRD **OQ-06** 签署（见「配置」）
+- ❌ OCR
 - ❌ 生产数据库选型（当前仅 SQLite）、备份恢复、并发验证
 - ❌ 真实 Office / WPS 导出兼容验收、生产数据保留制度
 - ⚠️ 已知残留缺陷：`/favicon.ico` 返回 404；角色不跨整页刷新持久化（客户端路由不受影响）
@@ -403,6 +404,14 @@ $env:HW_REVIEW_SAMPLE_ROOT = "D:\Document\AI创新应用大赛\硬件测试报�
 | `execution_lease_seconds` | `1800` | 执行租约，**必须大于最长单次评估**（DOC 转换超时上限 1200s） |
 | `workspace_ttl_seconds` | `86400` | 任务工作区保留期 |
 | `word_automation_policy` | `microsoft_only` | Word 自动化宿主信任策略，见下 |
+| `llm_enabled` | `false` | 语义规则大模型判定；**默认关闭，关闭时不出网** |
+| `llm_base_url` | 空 | OpenAI 兼容基址，如 `https://…/v1` |
+| `llm_api_key` | 空 | 密钥；只从环境变量读，不入库、不入仓 |
+| `llm_model` | 空 | 如 `deepseek-v4-flash` |
+| `llm_timeout_seconds` | `180` | 单次调用超时 |
+| `llm_max_tokens` | `4096` | 必须容得下推理模型的思维链 |
+| `llm_max_evidence_lines` | `12000` | 超过则整批转人工，**不截断** |
+| `llm_scope` | `all` | `all` = 全部启用检查项（默认）；`semantic_only` = 只补位引擎弃权的规则 |
 
 ### `HW_REVIEW_WORD_AUTOMATION_POLICY`
 
@@ -420,6 +429,40 @@ $env:HW_REVIEW_SAMPLE_ROOT = "D:\Document\AI创新应用大赛\硬件测试报�
 > 且部分产物可能与 Word 不同（实测同一份报告 PDF 体积差 24.4%）。因此
 > `ConversionProvenance.automation_host` 会记录实际使用的宿主，使每条 DOC 证据都能追溯到转换器。
 > 实测数据与结论见 [`docs/evidence/word-automation-policy/verification.md`](docs/evidence/word-automation-policy/verification.md)。
+
+### `HW_REVIEW_LLM_ENABLED` 与语义判定
+
+启用后，任务冻结快照里的**每个启用检查项**（`llm_scope=all`，默认）都会交给获授权大模型，
+取得带可核验证据的判定。
+
+**模型只决定引擎决定不了的事** —— 引擎已确定的结论永不被移动，两个方向都是：
+
+| 引擎结论 | 模型结论 | 最终 |
+|---|---|---|
+| `NEEDS_REVIEW` | 任意 | 模型结论 |
+| 确定 | 相同 | 引擎结论（保留引擎依据码，并入模型证据） |
+| `NON_COMPLIANT` | 更宽松 | **保留不符合** |
+| 其他确定 | 不同 | **`NEEDS_REVIEW`**（`LLM_DISAGREES_WITH_ENGINE`） |
+
+> 为什么要双向保护：`NON_COMPLIANT` 与 `COMPLIANT` 都**不会**强制人工复核，只有
+> `NEEDS_REVIEW` 会。所以模型**凭空清除**和**凭空造出**一个不符合项，后果一样 —— 静默通过。
+> 分歧一律升级人工，并把双方结论写进 `unresolved_semantics`。
+
+- 外发内容只有**编号证据行**（归一化文本）：不含原文件、本机路径、任务或模板标识。
+  14.7 MB 的 XLS 归一化后仅 8.3 万字符，约 5 万输入 token。**报告文件名会外发**
+  （TR-07「报告版本及命名」的判定对象本身包含文件名）。
+- 模型**只能引用行号**，行号由本地映射回 `EvidenceLocator`；`content_hash` 一律本地计算，
+  **不采信模型给出的任何地址或哈希** —— 因此引用无法伪造，越界行号直接作废该判定。
+- 任何失败（网络错误、`content` 为空、契约不符、行号越界、无证据的「符合」）都降级为
+  `NEEDS_REVIEW` 并记录 `LLM_*` 依据码，**永不**变成「符合」。
+- 证据行数超上限时整批转人工，**不截断** —— 截断会让判定无法核验。
+- 单条规则最多收录 **50** 个证据位置，超出时在 `basis_text` 中注明省略数量。
+
+> `ENABLED=true` 时启动日志会**显式警告报告文本将外发**。
+> PRD **OQ-06** 要求的信息安全与留存签署仍是上线前置条件，可签署材料见
+> [`docs/evidence/semantic-llm-judgment/data-egress-statement.md`](docs/evidence/semantic-llm-judgment/data-egress-statement.md)。
+> 实测数据（含**模型结论在同一输入下不可复现**）、16 条降级路径矩阵与 12 条合并策略矩阵见
+> [`docs/evidence/semantic-llm-judgment/verification.md`](docs/evidence/semantic-llm-judgment/verification.md)。
 
 > 运行时数据（`hw-review.db`、`storage/`、`.task-work/`）已在 `.gitignore` 中排除，不会进入版本库。
 

@@ -31,6 +31,25 @@ _DEFAULT_WORKSPACE_TTL_SECONDS = 86_400
 # "any_word_compatible" admits a WPS-class host and is a development channel
 # only. WordWorker validates the value, so a bad override fails startup.
 _DEFAULT_WORD_AUTOMATION_POLICY = "microsoft_only"
+# Semantic rule judgement via an authorized LLM. Disabled by default so that an
+# unconfigured deployment sends nothing off the machine, matching the PRD rule
+# that report content must never leave without explicit authorization.
+_DEFAULT_LLM_ENABLED = False
+_DEFAULT_LLM_BASE_URL = ""
+_DEFAULT_LLM_API_KEY = ""
+_DEFAULT_LLM_MODEL = ""
+_DEFAULT_LLM_TIMEOUT_SECONDS = 180
+# The provider is a reasoning model: a small budget is consumed entirely by the
+# chain of thought and `content` comes back empty (reproduced 2026-09-20).
+_DEFAULT_LLM_MAX_TOKENS = 4096
+# The largest frozen sample normalizes to ~83k characters, so this is a guard
+# against pathological inputs rather than a routine limit. Exceeding it degrades
+# the semantic rules; the evidence is never truncated.
+_DEFAULT_LLM_MAX_EVIDENCE_LINES = 12_000
+# "all" sends every enabled check item to the model; "semantic_only" keeps the
+# model as a fallback for rules the deterministic engine left undecided.
+LLM_SCOPES = ("all", "semantic_only")
+_DEFAULT_LLM_SCOPE = "all"
 
 
 def _default_a11_template_path() -> Path:
@@ -56,6 +75,14 @@ class Settings:
     execution_lease_seconds: int = _DEFAULT_EXECUTION_LEASE_SECONDS
     workspace_ttl_seconds: int = _DEFAULT_WORKSPACE_TTL_SECONDS
     word_automation_policy: str = _DEFAULT_WORD_AUTOMATION_POLICY
+    llm_enabled: bool = _DEFAULT_LLM_ENABLED
+    llm_base_url: str = _DEFAULT_LLM_BASE_URL
+    llm_api_key: str = _DEFAULT_LLM_API_KEY
+    llm_model: str = _DEFAULT_LLM_MODEL
+    llm_timeout_seconds: int = _DEFAULT_LLM_TIMEOUT_SECONDS
+    llm_max_tokens: int = _DEFAULT_LLM_MAX_TOKENS
+    llm_max_evidence_lines: int = _DEFAULT_LLM_MAX_EVIDENCE_LINES
+    llm_scope: str = _DEFAULT_LLM_SCOPE
 
 
 def _text(name: str, default: str) -> str:
@@ -87,12 +114,51 @@ def _path(name: str, default: Path) -> Path:
     return Path(raw.strip())
 
 
+def _flag(name: str, default: bool) -> bool:
+    """Parse a boolean override strictly; a bad value must fail startup."""
+
+    raw = os.environ.get(_ENV_PREFIX + name)
+    if raw is None:
+        return default
+    normalized = raw.strip().casefold()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{_ENV_PREFIX}{name} must be a boolean")
+
+
 def get_settings() -> Settings:
     """Build settings from ``HW_REVIEW_*`` environment variables."""
 
     secret = _text("LOCAL_SESSION_SECRET", _DEFAULT_LOCAL_SESSION_SECRET)
     if not secret.strip():
         raise ValueError(f"{_ENV_PREFIX}LOCAL_SESSION_SECRET must not be blank")
+    llm_enabled = _flag("LLM_ENABLED", _DEFAULT_LLM_ENABLED)
+    llm_base_url = _text("LLM_BASE_URL", _DEFAULT_LLM_BASE_URL).strip()
+    llm_api_key = _text("LLM_API_KEY", _DEFAULT_LLM_API_KEY).strip()
+    llm_model = _text("LLM_MODEL", _DEFAULT_LLM_MODEL).strip()
+    llm_scope = _text("LLM_SCOPE", _DEFAULT_LLM_SCOPE).strip()
+    if llm_scope not in LLM_SCOPES:
+        raise ValueError(
+            f"{_ENV_PREFIX}LLM_SCOPE must be one of: {', '.join(LLM_SCOPES)}"
+        )
+    if llm_enabled:
+        # Half-configured means the semantic rules would silently stay manual, so
+        # an enabled provider missing any part of its identity must not start.
+        incomplete = [
+            name
+            for name, value in (
+                ("LLM_BASE_URL", llm_base_url),
+                ("LLM_API_KEY", llm_api_key),
+                ("LLM_MODEL", llm_model),
+            )
+            if not value
+        ]
+        if incomplete:
+            raise ValueError(
+                f"{_ENV_PREFIX}LLM_ENABLED=true requires: {', '.join(incomplete)}"
+            )
     return Settings(
         database_url=_text("DATABASE_URL", _DEFAULT_DATABASE_URL),
         storage_root=_path("STORAGE_ROOT", _DEFAULT_STORAGE_ROOT),
@@ -112,4 +178,16 @@ def get_settings() -> Settings:
         word_automation_policy=_text(
             "WORD_AUTOMATION_POLICY", _DEFAULT_WORD_AUTOMATION_POLICY
         ).strip(),
+        llm_enabled=llm_enabled,
+        llm_base_url=llm_base_url,
+        llm_api_key=llm_api_key,
+        llm_model=llm_model,
+        llm_timeout_seconds=_positive_int(
+            "LLM_TIMEOUT_SECONDS", _DEFAULT_LLM_TIMEOUT_SECONDS
+        ),
+        llm_max_tokens=_positive_int("LLM_MAX_TOKENS", _DEFAULT_LLM_MAX_TOKENS),
+        llm_max_evidence_lines=_positive_int(
+            "LLM_MAX_EVIDENCE_LINES", _DEFAULT_LLM_MAX_EVIDENCE_LINES
+        ),
+        llm_scope=llm_scope,
     )
