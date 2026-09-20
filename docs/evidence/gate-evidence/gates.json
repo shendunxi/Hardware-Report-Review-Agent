@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0",
+  "description": "Supplementary evidence for the release gates the frozen-sample runner cannot compute from its own run. G6 reads `lifecycle`; G8 reads `ui`. Both abstain (NOT_RUN) when this file is absent, unreadable, older than 30 days, or missing a required field.",
+  "lifecycle": {
+    "suite": "backend",
+    "passed": 313,
+    "failed": 0,
+    "skipped": 6,
+    "recorded_at": "2026-09-20T06:27:53+00:00",
+    "command": "python -m pytest -q",
+    "converter_policy": "microsoft_only",
+    "note": "Default converter policy. The 6 skips are 2 opt-in release-gate assertions plus 4 environment limits: 2 need SeCreateSymbolicLinkPrivilege and 2 need genuine Microsoft Word."
+  },
+  "ui": {
+    "browser_verified": false,
+    "viewports": [],
+    "recorded_at": null,
+    "note": "No real browser session has been executed. The 17 frontend unit tests are not a substitute for browser verification, so G8 must stay NO-GO."
+  }
+}

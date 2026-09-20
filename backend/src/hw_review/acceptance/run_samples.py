@@ -7,12 +7,13 @@ import json
 import os
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
 import psutil
 
+from hw_review.config import get_settings
 from hw_review.domain import FileRole, ReviewInput, ReviewSource, SourceFileCreate
 from hw_review.parsers import DocParser, PdfParser, XlsParser
 from hw_review.rules import A11Engine, NormalizedDocumentQuery
@@ -25,6 +26,23 @@ MAX_GATE_SECONDS = 20 * 60
 # The frozen sample tree lives outside the repository, so the manifest stores
 # only repository-safe relative paths and the root is supplied by the caller.
 SAMPLE_ROOT_ENV = "HW_REVIEW_SAMPLE_ROOT"
+
+# This runner parses reports and evaluates rules. It cannot exercise the task
+# lifecycle or drive a real browser, so G6/G8 are only as trustworthy as the
+# evidence handed to it. Earlier revisions scraped prose out of historical task
+# reports, which made both gates report GO no matter what the current code did.
+# They now consume structured, dated evidence and abstain ("NOT_RUN") whenever it
+# is missing, unreadable, stale or from an unsupported schema.
+GATE_EVIDENCE_ENV = "HW_REVIEW_GATE_EVIDENCE"
+GATE_EVIDENCE_RELATIVE_PATH = Path("docs") / "evidence" / "gate-evidence" / "gates.json"
+GATE_EVIDENCE_SCHEMA_VERSION = "1.0"
+GATE_EVIDENCE_MAX_AGE_DAYS = 30
+# A floor so that a token suite cannot satisfy the lifecycle gate.
+MIN_LIFECYCLE_SUITE_PASSED = 100
+REQUIRED_UI_VIEWPORTS = ("1440x900", "1280x720", "760x900")
+GATE_STATUS_GO = "GO"
+GATE_STATUS_NO_GO = "NO-GO"
+GATE_STATUS_NOT_RUN = "NOT_RUN"
 
 
 class SamplePathError(ValueError):
@@ -160,7 +178,11 @@ def _load_manifest(path: Path, sample_root: Path) -> dict:
 
 
 def _parse_samples(
-    manifest: dict, output_dir: Path, *, sample_root: Path
+    manifest: dict,
+    output_dir: Path,
+    *,
+    sample_root: Path,
+    word_policy: str | None = None,
 ) -> tuple[list[dict], dict[str, tuple]]:
     work_root = output_dir / "_work"
     stager = FileStager(work_root)
@@ -168,7 +190,12 @@ def _parse_samples(
     parsers = {
         "XLS": XlsParser(),
         "PDF": PdfParser(),
-        "DOC": DocParser(timeout_seconds=MAX_GATE_SECONDS),
+        # The acceptance run must honour the same converter trust policy as the
+        # service, otherwise a WPS-only host can never produce DOC evidence.
+        "DOC": DocParser(
+            timeout_seconds=MAX_GATE_SECONDS,
+            word_policy=word_policy or get_settings().word_automation_policy,
+        ),
     }
     records: list[dict] = []
     parsed: dict[str, tuple] = {}
@@ -350,10 +377,128 @@ def _evaluate_groups(manifest: dict, file_records: list[dict], parsed: dict[str,
 
 
 def _gate(gate_id: str, title: str, passed: bool, evidence: str) -> dict:
-    return {"id": gate_id, "title": title, "status": "GO" if passed else "NO-GO", "evidence": evidence}
+    return {
+        "id": gate_id,
+        "title": title,
+        "status": GATE_STATUS_GO if passed else GATE_STATUS_NO_GO,
+        "evidence": evidence,
+    }
 
 
-def _build_gates(files: list[dict], groups: list[dict], repository_root: Path) -> list[dict]:
+def _abstained_gate(gate_id: str, title: str, evidence: str) -> dict:
+    """A gate this run cannot decide must abstain rather than claim a verdict."""
+    return {
+        "id": gate_id,
+        "title": title,
+        "status": GATE_STATUS_NOT_RUN,
+        "evidence": evidence,
+    }
+
+
+def _parse_utc(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        stamp = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+
+
+def _load_gate_evidence(repository_root: Path) -> tuple[dict | None, str]:
+    """Load supplementary lifecycle/UI evidence. Never echo an absolute path."""
+    override = os.environ.get(GATE_EVIDENCE_ENV)
+    path = (
+        Path(override.strip())
+        if override and override.strip()
+        else repository_root / GATE_EVIDENCE_RELATIVE_PATH
+    )
+    if not path.is_file():
+        return None, "supplementary gate evidence missing"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, "supplementary gate evidence unreadable"
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != GATE_EVIDENCE_SCHEMA_VERSION
+    ):
+        return None, "supplementary gate evidence has an unsupported schema"
+    return payload, "supplementary gate evidence accepted"
+
+
+def _evidence_is_fresh(recorded_at: object, reference: datetime) -> bool:
+    stamp = _parse_utc(recorded_at)
+    if stamp is None:
+        return False
+    age = reference - stamp
+    # Tolerate a day of future skew; anything older than the window is stale.
+    return timedelta(days=-1) <= age <= timedelta(days=GATE_EVIDENCE_MAX_AGE_DAYS)
+
+
+def _lifecycle_gate(evidence: dict | None, note: str, reference: datetime) -> dict:
+    """G6: the task state machine, attested by a dated backend-suite result."""
+    if evidence is None:
+        return _abstained_gate("G6", "Lifecycle", note)
+    section = evidence.get("lifecycle")
+    if not isinstance(section, dict):
+        return _abstained_gate("G6", "Lifecycle", f"lifecycle section absent; {note}")
+    passed = section.get("passed")
+    failed = section.get("failed")
+    skipped = section.get("skipped")
+    recorded_at = section.get("recorded_at")
+    decided = (
+        isinstance(passed, int)
+        and not isinstance(passed, bool)
+        and passed >= MIN_LIFECYCLE_SUITE_PASSED
+        and failed == 0
+        and _evidence_is_fresh(recorded_at, reference)
+    )
+    return _gate(
+        "G6",
+        "Lifecycle",
+        decided,
+        f"backend suite passed={passed} failed={failed} skipped={skipped} "
+        f"recorded_at={recorded_at}; {note}",
+    )
+
+
+def _ui_gate(evidence: dict | None, note: str, reference: datetime) -> dict:
+    """G8: a real browser flow, attested explicitly rather than inferred."""
+    if evidence is None:
+        return _abstained_gate("G8", "UI", note)
+    section = evidence.get("ui")
+    if not isinstance(section, dict):
+        return _abstained_gate("G8", "UI", f"ui section absent; {note}")
+    viewports = section.get("viewports")
+    observed = (
+        {item for item in viewports if isinstance(item, str)}
+        if isinstance(viewports, list)
+        else set()
+    )
+    missing = sorted(set(REQUIRED_UI_VIEWPORTS) - observed)
+    decided = (
+        section.get("browser_verified") is True
+        and not missing
+        and _evidence_is_fresh(section.get("recorded_at"), reference)
+    )
+    return _gate(
+        "G8",
+        "UI",
+        decided,
+        f"browser_verified={section.get('browser_verified')} "
+        f"recorded_at={section.get('recorded_at')} "
+        f"missing viewports={missing or 'none'}; {note}",
+    )
+
+
+def _build_gates(
+    files: list[dict],
+    groups: list[dict],
+    repository_root: Path,
+    completed_at: str | None = None,
+) -> list[dict]:
+    reference = _parse_utc(completed_at) or datetime.now(timezone.utc)
     source_ok = len(files) == 17 and all(item["source_unchanged"] for item in files)
     readable = len(files) == 17 and all(item["parse_status"] == "SUCCESS" for item in files)
     structural = readable and all(
@@ -374,22 +519,19 @@ def _build_gates(files: list[dict], groups: list[dict], repository_root: Path) -
         for group in groups
         for item in group["rule_results"]
     )
-    task7 = repository_root / ".superpowers" / "sdd" / "2026-09-11-a11-local-vertical-slice" / "task-7-report.md"
-    task7_text = task7.read_text(encoding="utf-8") if task7.is_file() else ""
-    lifecycle = "45 passed" in task7_text and "274 passed" in task7_text
-    performance = all(item["parse_seconds"] + item["rule_seconds"] <= MAX_GATE_SECONDS for item in files)
-    task8 = repository_root / ".superpowers" / "sdd" / "2026-09-11-a11-local-vertical-slice" / "task-8-report.md"
-    task8_text = task8.read_text(encoding="utf-8") if task8.is_file() else ""
-    ui_ok = "44 passed" in task8_text and "1440x900" in task8_text and "760x900" in task8_text
+    performance = all(
+        item["parse_seconds"] + item["rule_seconds"] <= MAX_GATE_SECONDS for item in files
+    )
+    evidence, note = _load_gate_evidence(repository_root)
     return [
         _gate("G1", "Source protection", source_ok, f"{sum(item['source_unchanged'] for item in files)}/17 unchanged fingerprints"),
         _gate("G2", "Readability", readable, f"{sum(item['parse_status'] == 'SUCCESS' for item in files)}/17 parsed successfully"),
         _gate("G3", "Structural completeness", structural, "all 17 normalized documents contain inventoried structure" if structural else "one or more inputs lack a successful normalized structure"),
         _gate("G4", "Rule completeness", rules_ok, f"{sum(len(group['rule_results']) == 21 for group in groups)}/15 groups have 21 active results"),
         _gate("G5", "Traceability", traceability, "every hard failure has evidence/missing material and every pending item has an unresolved reason" if traceability else "traceability invariant failed"),
-        _gate("G6", "Lifecycle", lifecycle, "Task 7 focused 45 pass and full backend 274 pass / 4 skips" if lifecycle else "Task 7 evidence unavailable or stale"),
+        _lifecycle_gate(evidence, note, reference),
         _gate("G7", "Performance", performance, f"all measured file parse + selected rule durations are <= {MAX_GATE_SECONDS} seconds"),
-        _gate("G8", "UI", ui_ok, "Task 8 real browser flow and 1440x900/1280x720/760x900 checks passed" if ui_ok else "Task 8 evidence unavailable or stale"),
+        _ui_gate(evidence, note, reference),
     ]
 
 
@@ -399,7 +541,8 @@ def _markdown(result: dict) -> str:
         "",
         f"Run: `{result['run_id']}`  ",
         f"Overall release decision: **{result['overall_release_decision']}**  ",
-        f"Files: {len(result['files'])}; business groups: {len(result['report_groups'])}",
+        f"Files: {len(result['files'])}; business groups: {len(result['report_groups'])}  ",
+        f"Word automation policy: `{result['word_automation_policy']}`",
         "",
         "## File matrix",
         "",
@@ -450,39 +593,59 @@ def _release_gates_markdown(result: dict) -> str:
         "",
         "Machine-readable evidence: [sample-results.json](sample-results.json)  ",
         "Human-readable matrix: [sample-results.md](sample-results.md)  ",
-        "Automated-suite evidence: [Task 9 report](../../../.superpowers/sdd/2026-09-11-a11-local-vertical-slice/task-9-report.md)  ",
-        "Lifecycle evidence: [Task 7 report](../../../.superpowers/sdd/2026-09-11-a11-local-vertical-slice/task-7-report.md)  ",
-        "Browser evidence: [Task 8 report](../../../.superpowers/sdd/2026-09-11-a11-local-vertical-slice/task-8-report.md)",
+        "Supplementary lifecycle/UI evidence: [gates.json](../gate-evidence/gates.json)  ",
+        "Run record: [verification.md](verification.md)",
         "",
         "## Unverified or deferred",
         "",
-        "Real LLM calls, OCR, DOCX/XLSX real-sample compatibility, production database selection, authentication/authorization and formal A11 XLS writeback are not release-proven. Genuine Microsoft Word remains required for the DOC gate; WPS evidence is not accepted.",
+        "G1-G5 and G7 are computed from this run. G6 and G8 are read from "
+        "`docs/evidence/gate-evidence/gates.json` and report NOT_RUN when that "
+        "evidence is absent, stale or incomplete -- they are never inferred from prose.",
+        "",
+        "Real LLM calls, OCR, DOCX/XLSX real-sample compatibility, production database selection, authentication/authorization and formal A11 XLS writeback are not release-proven. Genuine Microsoft Word remains required for the acceptance-grade DOC gate; a Word-compatible host such as WPS is a development channel only, and the policy that produced this run is recorded in `sample-results.json`.",
     ])
     return "\n".join(lines) + "\n"
 
 
-def run(manifest_path: Path, output_dir: Path, *, sample_root: Path) -> dict:
+def run(
+    manifest_path: Path,
+    output_dir: Path,
+    *,
+    sample_root: Path,
+    word_policy: str | None = None,
+) -> dict:
     repository_root = Path(__file__).resolve().parents[4]
     manifest = _load_manifest(manifest_path, sample_root)
     output_dir.mkdir(parents=True, exist_ok=True)
     started_at = _utc_now()
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    files, parsed = _parse_samples(manifest, output_dir, sample_root=sample_root)
+    policy = word_policy or get_settings().word_automation_policy
+    files, parsed = _parse_samples(
+        manifest, output_dir, sample_root=sample_root, word_policy=policy
+    )
     groups = _evaluate_groups(manifest, files, parsed)
-    gates = _build_gates(files, groups, repository_root)
+    completed_at = _utc_now()
+    gates = _build_gates(files, groups, repository_root, completed_at)
     result = {
         "schema_version": "1.1",
         "run_id": run_id,
         "started_at": started_at,
-        "completed_at": _utc_now(),
+        "completed_at": completed_at,
         # Record caller-supplied values verbatim: committed evidence must not
         # carry machine-specific absolute paths.
         "manifest": str(manifest_path),
         "sample_root": str(sample_root),
+        # A Word-compatible converter is not acceptance-grade, so the evidence
+        # must state which policy produced these DOC results.
+        "word_automation_policy": policy,
         "files": files,
         "report_groups": groups,
         "gates": gates,
-        "overall_release_decision": "GO" if all(item["status"] == "GO" for item in gates) else "NO-GO",
+        "overall_release_decision": (
+            GATE_STATUS_GO
+            if all(item["status"] == GATE_STATUS_GO for item in gates)
+            else GATE_STATUS_NO_GO
+        ),
     }
     (output_dir / "sample-results.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (output_dir / "sample-results.md").write_text(_markdown(result), encoding="utf-8")
@@ -509,7 +672,17 @@ def main(argv: list[str] | None = None) -> int:
             f"--sample-root is required, or set {SAMPLE_ROOT_ENV} to the sample tree root"
         )
     result = run(args.manifest, args.output, sample_root=Path(root))
-    print(json.dumps({"run_id": result["run_id"], "decision": result["overall_release_decision"], "gates": result["gates"]}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "run_id": result["run_id"],
+                "decision": result["overall_release_decision"],
+                "word_automation_policy": result["word_automation_policy"],
+                "gates": result["gates"],
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0 if result["overall_release_decision"] == "GO" else 1
 
 

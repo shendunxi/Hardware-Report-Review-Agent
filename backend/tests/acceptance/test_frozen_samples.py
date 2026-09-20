@@ -11,7 +11,24 @@ import pytest
 
 BACKEND = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = Path(__file__).with_name("sample_manifest.json")
-RESULTS_PATH = BACKEND.parent / "docs" / "evidence" / "a11-local-vertical-slice" / "sample-results.json"
+# The frozen-sample contract must be checked against a current artefact. Pinning
+# it to one historical directory meant the contract silently described a run that
+# no longer matched the code.
+RESULTS_ENV = "HW_REVIEW_FROZEN_RESULTS"
+EVIDENCE_ROOT = BACKEND.parent / "docs" / "evidence"
+
+
+def _current_results_path() -> Path:
+    override = os.environ.get(RESULTS_ENV)
+    if override and override.strip():
+        return Path(override.strip())
+    dated = sorted(EVIDENCE_ROOT.glob("a11-acceptance-*/sample-results.json"))
+    if dated:
+        return dated[-1]
+    return EVIDENCE_ROOT / "a11-local-vertical-slice" / "sample-results.json"
+
+
+RESULTS_PATH = _current_results_path()
 
 
 @pytest.fixture(scope="module")

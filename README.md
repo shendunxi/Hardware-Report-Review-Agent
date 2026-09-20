@@ -345,6 +345,26 @@ $env:HW_REVIEW_SAMPLE_ROOT = "D:\Document\AI创新应用大赛\硬件测试报�
 
 退出码：全部 GO 返回 `0`，否则返回 `1`。
 
+### 门禁是怎么算出来的
+
+- **G1–G5、G7 由本次运行直接计算**：源指纹、解析状态、结构完整性、规则完整性、可追溯性、耗时。
+- **G6（Lifecycle）与 G8（UI）无法由本 runner 计算** —— 它只做「暂存 → 解析 → 规则判定」，
+  既不驱动任务状态机也不启动浏览器。这两项改为读取结构化补充证据
+  [`docs/evidence/gate-evidence/gates.json`](docs/evidence/gate-evidence/gates.json)
+  （可用 `HW_REVIEW_GATE_EVIDENCE` 覆盖路径）：
+
+  | 门禁 | 判据 |
+  |---|---|
+  | G6 | `lifecycle.failed == 0` 且 `lifecycle.passed >= 100`（下限防空套件）且 `recorded_at` 在 30 天内 |
+  | G8 | `ui.browser_verified == true` 且视口覆盖 `1440x900`/`1280x720`/`760x900` 且在 30 天内 |
+
+  证据缺失、不可读、schema 不匹配或过期时，状态为 **`NOT_RUN`**，整体决策不会成为 `GO`。
+
+> 早期版本把这两项实现为「去历史 task 报告里搜 `"274 passed"`、`"1440x900"` 等子串」。
+> 那让门禁与当前代码完全解耦：测试全挂、从未启动浏览器，也照样报 GO。
+> 现改为对无法判定的门禁**弃权**，并已按此重跑（G8 如实为 NO-GO）。详见
+> [`docs/evidence/a11-acceptance-2026-09-20/verification.md`](docs/evidence/a11-acceptance-2026-09-20/verification.md)。
+
 > **前置条件**：样本根中必须存在 manifest 里那 17 个 `relative_path`。
 > manifest 只保存**仓库安全的相对路径**，样本根由运行时供给，因此同一份 manifest 可在任意机器复用；
 > 若样本没有挂载，会得到 `SOURCE_NOT_FOUND` —— 这是预期行为，不是缺陷。
