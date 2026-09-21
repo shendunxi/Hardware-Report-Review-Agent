@@ -297,8 +297,42 @@ def _declared_field_names(locator: EvidenceLocator) -> tuple[str, ...]:
     )
 
 
+# Handlers are named after their rule ID: TR-17 -> `_rule_17`.
+_RULE_HANDLER_NAME = re.compile(r"^_rule_(\d{2})$")
+
+
 class A11Engine:
     """Evaluate the 21 enabled A11 rows without LLM or inferred policy."""
+
+    def __init__(self) -> None:
+        """Prove the registry and the handlers agree one-to-one.
+
+        ``evaluate_rule`` resolves its handler by attribute name, so a registry row
+        without a handler would only fail once a task reached evaluation -- after
+        the upload was accepted. Checking at construction turns that into a
+        startup failure, and flags the reverse mistake (a handler for a rule that
+        is not enabled, which would never run).
+        """
+
+        handlers = {
+            name for name in dir(self) if _RULE_HANDLER_NAME.fullmatch(name)
+        }
+        expected = {
+            f"_rule_{definition.id[3:]}": definition.id
+            for definition in A11Registry.executed_rules()
+        }
+        if missing := sorted(set(expected) - handlers):
+            # Report the rule ID first: it is what the registry and the checklist
+            # row use, and the handler name is derived from it anyway.
+            raise ValueError(
+                "enabled A11 rules have no evaluation handler: "
+                + ", ".join(f"{expected[name]} ({name})" for name in missing)
+            )
+        if orphaned := sorted(handlers - set(expected)):
+            raise ValueError(
+                "A11 evaluation handlers have no enabled rule: "
+                f"{', '.join(orphaned)}"
+            )
 
     def evaluate(self, review_input: ReviewInput) -> tuple[RuleResult, ...]:
         return tuple(

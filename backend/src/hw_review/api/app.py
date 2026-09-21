@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from fastapi.exceptions import RequestValidationError
 from hw_review.api.routes.tasks import router as task_router
 from hw_review.api.routes.templates import router as template_router
 from hw_review.api.routes.session import router as session_router
-from hw_review.config import Settings, get_settings
+from hw_review.config import Settings, get_settings, self_check
 from hw_review.parsers import DocParser, PdfParser, XlsParser, XlsxParser
 from hw_review.persistence import repositories
 from hw_review.rules import A11Engine
@@ -109,10 +110,55 @@ def _semantic_judge(settings: Settings):
     return judge
 
 
+def _select_frontend_root(repository_root: Path) -> tuple[Path | None, str]:
+    """Decide what to serve at ``/`` and report which source won.
+
+    ``frontend/dist`` is a build artifact and is git-ignored, so a fresh checkout
+    has none. Falling back to the prototype used to be silent, which let an
+    operator believe the real application was being served when it was not.
+    """
+
+    vue_root = repository_root / "frontend" / "dist"
+    prototype_root = repository_root / "prototype" / "a11-ui"
+    if (vue_root / "index.html").is_file():
+        return vue_root, "vue"
+    if (prototype_root / "index.html").is_file():
+        _LOGGER.warning(
+            "frontend/dist has no index.html; serving the static prototype from %s "
+            "instead of the real application (run `npm run build` in frontend/)",
+            prototype_root,
+        )
+        return prototype_root, "prototype"
+    _LOGGER.error(
+        "no frontend to serve: neither %s nor %s contains index.html; the API is "
+        "reachable but / will return 404",
+        vue_root,
+        prototype_root,
+    )
+    return None, "none"
+
+
+def _lifespan(bundle):
+    """Close the shared engine when the application stops.
+
+    A lifespan handler replaces the deprecated ``@app.on_event("shutdown")``.
+    FastAPI runs it for the real server and for an in-process ASGI transport.
+    """
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        try:
+            yield
+        finally:
+            bundle.close()
+
+    return lifespan
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
-    if settings.auth_mode not in {"local", "disabled"}:
-        raise RuntimeError("AUTH_PROVIDER_NOT_CONFIGURED")
+    for warning in self_check(settings):
+        _LOGGER.warning("configuration: %s", warning)
     bundle = repositories(settings.database_url)
     cleaner = WorkspaceCleaner(
         settings.storage_root,
@@ -140,7 +186,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         cleaner,
         execution_lease_seconds=settings.execution_lease_seconds,
     )
-    app = FastAPI()
+    app = FastAPI(lifespan=_lifespan(bundle))
     app.state.settings, app.state.lifecycle, app.state.repositories = settings, lifecycle, bundle
     app.state.checklist_export = A11ChecklistExportService(
         bundle, A11ChecklistWriter(settings.a11_template_path)
@@ -160,15 +206,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(task_router)
     app.include_router(template_router)
     app.include_router(session_router)
-    repository_root = Path(__file__).resolve().parents[4]
-    vue_root = repository_root / "frontend" / "dist"
-    prototype_root = repository_root / "prototype" / "a11-ui"
-    static_root = vue_root if (vue_root / "index.html").is_file() else prototype_root
-    if static_root.is_dir():
-        app.mount("/", SPAStaticFiles(directory=static_root, html=True), name="frontend")
-
-    @app.on_event("shutdown")
-    def shutdown() -> None:
-        bundle.close()
+    frontend_root, frontend_source = _select_frontend_root(
+        Path(__file__).resolve().parents[4]
+    )
+    app.state.frontend_root = frontend_root
+    app.state.frontend_source = frontend_source
+    if frontend_root is not None:
+        app.mount("/", SPAStaticFiles(directory=frontend_root, html=True), name="frontend")
 
     return app

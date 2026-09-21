@@ -18,7 +18,9 @@ from .enums import (
     TemplateAuditAction,
     TemplateStatus,
 )
+from .addressing import a1_address
 from .hashing import normalized_text_hash, ordered_identity_hash
+from .timestamps import as_utc, as_utc_optional
 
 
 class DomainModel(BaseModel):
@@ -40,6 +42,21 @@ class DomainModel(BaseModel):
         return type(self).model_validate(payload)
 
 
+def _validate_evidence_kinds(
+    role: FileRole, evidence_kinds: tuple[EvidenceKind, ...]
+) -> None:
+    """Evidence kinds are required on supporting evidence, forbidden on the report.
+
+    ``SourceFileCreate`` (what the caller declares) and ``StagedFile`` (what the
+    stager verified) carry the same rule, so it is stated once and applied twice.
+    """
+
+    if role is FileRole.SUPPORTING_EVIDENCE and not evidence_kinds:
+        raise ValueError("evidence_kinds are required for supporting evidence")
+    if role is FileRole.PRIMARY_REPORT and evidence_kinds:
+        raise ValueError("evidence_kinds are not allowed for a primary report")
+
+
 class SourceFileCreate(DomainModel):
     """Metadata supplied with a primary report or supporting evidence file."""
 
@@ -49,10 +66,7 @@ class SourceFileCreate(DomainModel):
 
     @model_validator(mode="after")
     def validate_evidence_kinds(self) -> "SourceFileCreate":
-        if self.role is FileRole.SUPPORTING_EVIDENCE and not self.evidence_kinds:
-            raise ValueError("evidence_kinds are required for supporting evidence")
-        if self.role is FileRole.PRIMARY_REPORT and self.evidence_kinds:
-            raise ValueError("evidence_kinds are not allowed for a primary report")
+        _validate_evidence_kinds(self.role, self.evidence_kinds)
         return self
 
 
@@ -72,23 +86,11 @@ class StagedFile(DomainModel):
 
     @model_validator(mode="after")
     def validate_evidence_kinds(self) -> "StagedFile":
-        if self.role is FileRole.SUPPORTING_EVIDENCE and not self.evidence_kinds:
-            raise ValueError("evidence_kinds are required for supporting evidence")
-        if self.role is FileRole.PRIMARY_REPORT and self.evidence_kinds:
-            raise ValueError("evidence_kinds are not allowed for a primary report")
+        _validate_evidence_kinds(self.role, self.evidence_kinds)
         return self
 
 
 JsonScalar = str | int | float | bool | None
-
-
-def _a1_address(row: int, column: int) -> str:
-    letters = ""
-    value = column + 1
-    while value:
-        value, remainder = divmod(value - 1, 26)
-        letters = chr(65 + remainder) + letters
-    return f"{letters}{row + 1}"
 
 
 class ParseWarning(DomainModel):
@@ -137,7 +139,7 @@ class TableCell(DomainModel):
 
     @model_validator(mode="after")
     def validate_addresses(self) -> "TableCell":
-        if self.address != _a1_address(self.row, self.column):
+        if self.address != a1_address(self.row, self.column):
             raise ValueError("row and column must agree with address")
         if not self.structural_address.endswith(f"/cell:{self.address}"):
             raise ValueError("structural_address must end with the cell address")
@@ -330,14 +332,6 @@ class RuleDefinition(DomainModel):
         return self
 
 
-def _template_utc_datetime(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError("timestamp must include a UTC offset")
-    return value.astimezone(timezone.utc)
-
-
 class TemplateValidationFinding(DomainModel):
     """One persisted structural blocker or non-blocking publication warning."""
 
@@ -367,9 +361,9 @@ class TemplateVersion(DomainModel):
     updated_at: datetime
     published_at: datetime | None = None
 
-    _normalize_created_at = field_validator("created_at")(_template_utc_datetime)
-    _normalize_updated_at = field_validator("updated_at")(_template_utc_datetime)
-    _normalize_published_at = field_validator("published_at")(_template_utc_datetime)
+    _normalize_created_at = field_validator("created_at")(as_utc_optional)
+    _normalize_updated_at = field_validator("updated_at")(as_utc_optional)
+    _normalize_published_at = field_validator("published_at")(as_utc_optional)
 
     @model_validator(mode="after")
     def validate_publication_time(self) -> "TemplateVersion":
@@ -397,8 +391,8 @@ class TemplateRule(DomainModel):
     created_at: datetime
     updated_at: datetime
 
-    _normalize_created_at = field_validator("created_at")(_template_utc_datetime)
-    _normalize_updated_at = field_validator("updated_at")(_template_utc_datetime)
+    _normalize_created_at = field_validator("created_at")(as_utc_optional)
+    _normalize_updated_at = field_validator("updated_at")(as_utc_optional)
 
     @model_validator(mode="after")
     def validate_enabled_judgment(self) -> "TemplateRule":
@@ -420,7 +414,7 @@ class TemplateAuditEvent(DomainModel):
     before: dict[str, JsonScalar] | None = None
     after: dict[str, JsonScalar] | None = None
 
-    _normalize_occurred_at = field_validator("occurred_at")(_template_utc_datetime)
+    _normalize_occurred_at = field_validator("occurred_at")(as_utc_optional)
 
     @model_validator(mode="after")
     def validate_snapshots(self) -> "TemplateAuditEvent":
@@ -454,12 +448,6 @@ class ReviewSource(DomainModel):
         return self
 
 
-def _review_utc_datetime(value: datetime) -> datetime:
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError("timestamp must include a UTC offset")
-    return value.astimezone(timezone.utc)
-
-
 from .ports import DocumentQuery
 
 
@@ -476,7 +464,7 @@ class ReviewInput(DomainModel):
     evaluated_at: datetime
     query: DocumentQuery
 
-    _normalize_evaluated_at = field_validator("evaluated_at")(_review_utc_datetime)
+    _normalize_evaluated_at = field_validator("evaluated_at")(as_utc)
 
     @model_validator(mode="after")
     def validate_sources_and_query(self) -> "ReviewInput":
@@ -490,12 +478,6 @@ class ReviewInput(DomainModel):
         if not all(callable(getattr(self.query, name, None)) for name in required_methods):
             raise ValueError("query must implement DocumentQuery")
         return self
-
-
-def _utc_datetime(value: datetime) -> datetime:
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError("timestamp must include a UTC offset")
-    return value.astimezone(timezone.utc)
 
 
 class ReviewTask(DomainModel):
@@ -514,8 +496,8 @@ class ReviewTask(DomainModel):
     created_at: datetime
     updated_at: datetime
 
-    _normalize_created_at = field_validator("created_at")(_utc_datetime)
-    _normalize_updated_at = field_validator("updated_at")(_utc_datetime)
+    _normalize_created_at = field_validator("created_at")(as_utc)
+    _normalize_updated_at = field_validator("updated_at")(as_utc)
 
 
 class RuleResult(DomainModel):
@@ -535,7 +517,7 @@ class RuleResult(DomainModel):
     active_revision_no: int = Field(ge=0)
     created_at: datetime
 
-    _normalize_created_at = field_validator("created_at")(_utc_datetime)
+    _normalize_created_at = field_validator("created_at")(as_utc)
 
 
 class ManualDecision(DomainModel):
@@ -549,7 +531,7 @@ class ManualDecision(DomainModel):
     actor: str = Field(min_length=1)
     decided_at: datetime
 
-    _normalize_decided_at = field_validator("decided_at")(_utc_datetime)
+    _normalize_decided_at = field_validator("decided_at")(as_utc)
 
 
 class ReviewRevision(DomainModel):
@@ -561,7 +543,7 @@ class ReviewRevision(DomainModel):
     completed_at: datetime
     result_snapshot: str = Field(min_length=1)
 
-    _normalize_completed_at = field_validator("completed_at")(_utc_datetime)
+    _normalize_completed_at = field_validator("completed_at")(as_utc)
 
 
 class StageFailure(DomainModel):
@@ -574,4 +556,4 @@ class StageFailure(DomainModel):
     message: str = Field(min_length=1)
     occurred_at: datetime
 
-    _normalize_occurred_at = field_validator("occurred_at")(_utc_datetime)
+    _normalize_occurred_at = field_validator("occurred_at")(as_utc)

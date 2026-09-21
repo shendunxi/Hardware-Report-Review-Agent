@@ -50,6 +50,27 @@ _DEFAULT_LLM_MAX_EVIDENCE_LINES = 12_000
 # model as a fallback for rules the deterministic engine left undecided.
 LLM_SCOPES = ("all", "semantic_only")
 _DEFAULT_LLM_SCOPE = "all"
+# A production deployment must not be able to look like a developer machine.
+# "development" keeps the relative-path defaults usable; "production" refuses
+# every setting that only makes sense inside a checkout.
+ENVIRONMENTS = ("development", "production")
+_DEFAULT_ENVIRONMENT = "development"
+# Only these modes exist until a real identity provider is wired up. Anything
+# else must stop startup rather than be treated as "no authentication".
+AUTH_MODES = ("local", "disabled")
+# The documented default plus the usual placeholders. Accepting any of these as
+# the session secret would let anyone who read the README forge a signed session.
+_WEAK_SESSION_SECRETS = frozenset(
+    {
+        _DEFAULT_LOCAL_SESSION_SECRET,
+        "change-me",
+        "changeme",
+        "password",
+        "secret",
+        "test",
+    }
+)
+_MINIMUM_SESSION_SECRET_LENGTH = 32
 
 
 def _default_a11_template_path() -> Path:
@@ -83,6 +104,7 @@ class Settings:
     llm_max_tokens: int = _DEFAULT_LLM_MAX_TOKENS
     llm_max_evidence_lines: int = _DEFAULT_LLM_MAX_EVIDENCE_LINES
     llm_scope: str = _DEFAULT_LLM_SCOPE
+    environment: str = _DEFAULT_ENVIRONMENT
 
 
 def _text(name: str, default: str) -> str:
@@ -114,6 +136,89 @@ def _path(name: str, default: Path) -> Path:
     return Path(raw.strip())
 
 
+def _is_relative_database_url(url: str) -> bool:
+    """True when a SQLite URL resolves against the process working directory.
+
+    ``sqlite:///./x`` and ``sqlite:///x`` are relative; ``sqlite:////x`` (the
+    extra slash is the root) and ``sqlite:///C:/x`` are absolute. A server-based
+    URL never depends on the working directory, so it is never flagged.
+    """
+
+    prefix = "sqlite:///"
+    if not url.startswith(prefix):
+        return False
+    remainder = url[len(prefix) :]
+    if not remainder:
+        return False
+    if remainder.startswith(("/", "\\")):
+        return False
+    return not Path(remainder).is_absolute()
+
+
+def self_check(settings: Settings) -> tuple[str, ...]:
+    """Validate a built ``Settings``; warnings are returned, blockers are raised.
+
+    Anything that makes a deployment unsafe or ambiguous stops startup instead of
+    degrading: an unknown auth mode, a shipped-default session secret, or -- in
+    production -- a data location that depends on the process working directory.
+    """
+
+    if settings.auth_mode not in AUTH_MODES:
+        raise ValueError(
+            f"{_ENV_PREFIX}AUTH_MODE must be one of: {', '.join(AUTH_MODES)}; "
+            "no external identity provider is implemented yet"
+        )
+
+    relative = [
+        name
+        for name, is_relative in (
+            ("DATABASE_URL", _is_relative_database_url(settings.database_url)),
+            ("STORAGE_ROOT", not Path(settings.storage_root).is_absolute()),
+        )
+        if is_relative
+    ]
+    warnings: list[str] = []
+    if relative:
+        # The defaults are relative on purpose so that uvicorn started from
+        # backend/ just works. Outside a checkout that is an accident waiting to
+        # happen, which is why production refuses it outright.
+        detail = f"{', '.join(relative)} resolve against the process working directory"
+        if settings.environment == "production":
+            raise ValueError(
+                f"production requires absolute paths: {detail}; "
+                f"set {_ENV_PREFIX}ENVIRONMENT=development for a local run"
+            )
+        warnings.append(
+            f"{detail} (allowed because {_ENV_PREFIX}ENVIRONMENT="
+            f"{settings.environment})"
+        )
+
+    if settings.local_session_secret in _WEAK_SESSION_SECRETS or (
+        len(settings.local_session_secret) < _MINIMUM_SESSION_SECRET_LENGTH
+    ):
+        detail = (
+            f"{_ENV_PREFIX}LOCAL_SESSION_SECRET is a shipped default or shorter "
+            f"than {_MINIMUM_SESSION_SECRET_LENGTH} characters"
+        )
+        if settings.environment == "production":
+            raise ValueError(f"production requires a strong session secret: {detail}")
+        warnings.append(f"{detail} (allowed because {_ENV_PREFIX}ENVIRONMENT="
+                        f"{settings.environment})")
+
+    if settings.environment == "production" and settings.auth_mode == "disabled":
+        raise ValueError(
+            "production must not run with "
+            f"{_ENV_PREFIX}AUTH_MODE=disabled; that mode exists for tests"
+        )
+
+    if not settings.llm_enabled:
+        warnings.append(
+            "semantic judgement is disabled; semantic rules will stop at "
+            "NEEDS_REVIEW and no report content leaves this machine"
+        )
+    return tuple(warnings)
+
+
 def _flag(name: str, default: bool) -> bool:
     """Parse a boolean override strictly; a bad value must fail startup."""
 
@@ -138,11 +243,12 @@ def get_settings() -> Settings:
     llm_base_url = _text("LLM_BASE_URL", _DEFAULT_LLM_BASE_URL).strip()
     llm_api_key = _text("LLM_API_KEY", _DEFAULT_LLM_API_KEY).strip()
     llm_model = _text("LLM_MODEL", _DEFAULT_LLM_MODEL).strip()
-    llm_scope = _text("LLM_SCOPE", _DEFAULT_LLM_SCOPE).strip()
-    if llm_scope not in LLM_SCOPES:
+    environment = _text("ENVIRONMENT", _DEFAULT_ENVIRONMENT).strip().casefold()
+    if environment not in ENVIRONMENTS:
         raise ValueError(
-            f"{_ENV_PREFIX}LLM_SCOPE must be one of: {', '.join(LLM_SCOPES)}"
+            f"{_ENV_PREFIX}ENVIRONMENT must be one of: {', '.join(ENVIRONMENTS)}"
         )
+    llm_scope = _text("LLM_SCOPE", _DEFAULT_LLM_SCOPE).strip()
     if llm_enabled:
         # Half-configured means the semantic rules would silently stay manual, so
         # an enabled provider missing any part of its identity must not start.
@@ -190,4 +296,5 @@ def get_settings() -> Settings:
             "LLM_MAX_EVIDENCE_LINES", _DEFAULT_LLM_MAX_EVIDENCE_LINES
         ),
         llm_scope=llm_scope,
+        environment=environment,
     )

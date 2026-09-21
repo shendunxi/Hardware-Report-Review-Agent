@@ -232,8 +232,10 @@ pnpm typecheck
 pnpm build        # 产物 → frontend/dist/
 ```
 
-> 后端在 `frontend/dist/index.html` 存在时托管 Vue 应用；**不存在时静默回退到 `prototype/a11-ui` 旧原型**。
-> 若发现页面是旧版样式，先确认是否已完成 `pnpm build`。
+> 后端在 `frontend/dist/index.html` 存在时托管 Vue 应用；不存在时回退到 `prototype/a11-ui` 旧原型
+> 并**在启动日志中记录 WARNING**；两者都不存在时记录 ERROR 且 `/` 返回 404 —— 不再静默。
+> 若发现页面是旧版样式，先确认是否已完成 `pnpm build`，再核对 `app.state.frontend_source`
+> （`vue` / `prototype` / `none`）。
 
 ### 首次启动会发生什么
 
@@ -392,8 +394,11 @@ $env:HW_REVIEW_SAMPLE_ROOT = "D:\Document\AI创新应用大赛\硬件测试报�
 全部配置集中在 [`backend/src/hw_review/config.py`](backend/src/hw_review/config.py) 的 `Settings`。
 每一项都可用 `HW_REVIEW_` 前缀的环境变量覆盖；`get_settings()` 读取环境变量，未设置时使用下表默认值。
 
+启动时会做一次配置自检；**不通过则拒绝启动**，不静默降级（见「启动自检」）。
+
 | 字段 | 默认值 | 说明 |
 |---|---|---|
+| `environment` | `development` | `development` / `production`；**决定自检严格程度**，见下 |
 | `database_url` | `sqlite:///./hw-review.db` | 开发库。**相对路径**，依赖进程工作目录为 `backend/` |
 | `storage_root` | `./storage` | 上传暂存、Word 转换产物、模板受管副本 |
 | `a11_template_path` | `resources/a11/hardware-test-process-checklist-a11.xls` | A11 基线模板 |
@@ -412,6 +417,22 @@ $env:HW_REVIEW_SAMPLE_ROOT = "D:\Document\AI创新应用大赛\硬件测试报�
 | `llm_max_tokens` | `4096` | 必须容得下推理模型的思维链 |
 | `llm_max_evidence_lines` | `12000` | 超过则整批转人工，**不截断** |
 | `llm_scope` | `all` | `all` = 全部启用检查项（默认）；`semantic_only` = 只补位引擎弃权的规则 |
+
+### 启动自检
+
+`create_app()` 调用 `config.self_check()`：不通过**抛出异常拒绝启动**，通过但可疑则写日志告警。
+
+| 情形 | `development` | `production` |
+|---|---|---|
+| `auth_mode` 不是 `local` / `disabled` | **拒绝启动**（尚无外部身份提供方） | **拒绝启动** |
+| `database_url` 或 `storage_root` 是相对路径 | 告警 | **拒绝启动** |
+| `local_session_secret` 为默认值或短于 32 字符 | 告警 | **拒绝启动** |
+| `auth_mode=disabled` | 允许（测试用） | **拒绝启动** |
+| 语义判定未启用 | 告警（语义规则会停在待人工确认） | 同左 |
+
+> 为什么区分环境：默认值是相对路径，这样从 `backend/` 启动 `uvicorn` 就能直接工作。
+> 但「相对当前工作目录」在正式部署里是隐患，所以 `production` 直接拒绝。
+> **本项目的生产身份认证仍为 NO-GO**，`environment=production` 目前的作用是让这些检查生效。
 
 ### `HW_REVIEW_WORD_AUTOMATION_POLICY`
 

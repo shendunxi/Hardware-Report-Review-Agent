@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from hw_review.domain import FinalStatus, ManualDecision, ReviewStatus, ReviewTask, StageFailure, TaskState
-from hw_review.persistence import InvalidEvaluationResultSetError, RepositoryConflictError, RepositoryNotFoundError
+from hw_review.persistence import InvalidEvaluationResultSetError, RepositoryConflictError, RepositoryError, RepositoryNotFoundError
 from hw_review.services.cleanup import WorkspaceCleaner
 from hw_review.services.evaluation import EvaluationError, EvaluationService
 from hw_review.services.staging import FileStager, StageError
@@ -76,15 +76,24 @@ class LifecycleService:
         task = ReviewTask(id=task_id, state=TaskState.CREATED, active_revision_no=0, display_name=display_name,
                           created_at=now, updated_at=now, **binding)
         self._bundle.tasks.create(task)
-        staged = []
+        staged: list = []
         try:
             for ingress, metadata in files:
-                source = self._stager.stage(ingress, task_id, metadata)
-                self._bundle.sources.create(source)
-                staged.append(source)
+                staged.append(self._stager.stage(ingress, task_id, metadata))
         except StageError as error:
             self._fail(task, "STAGING", error.code, str(error))
             raise LifecycleError("INVALID_UPLOAD", "upload could not be safely staged", {"stage_code": error.code}) from error
+        try:
+            self._bundle.sources.create_all(tuple(staged))
+        except RepositoryError as error:
+            # The whole source set is recorded in one transaction, so this failure
+            # cannot leave the task pointing at a subset of its own uploads.
+            self._fail(task, "STAGING", "SOURCE_COMMIT_FAILED", str(error))
+            raise LifecycleError(
+                "INVALID_UPLOAD",
+                "staged sources could not be recorded",
+                {"stage_code": "SOURCE_COMMIT_FAILED"},
+            ) from error
         return task, tuple(staged)
 
     def _transition(self, task: ReviewTask, state: TaskState) -> ReviewTask:
@@ -209,11 +218,32 @@ class LifecycleService:
         except RepositoryNotFoundError as error:
             raise LifecycleError("TASK_NOT_FOUND", "task was not found") from error
 
+    def _task_records(self, task: ReviewTask) -> dict:
+        """Every child record of one task.
+
+        ``detail`` and ``list_summary`` expose the same shape, so the read order
+        for a task's children lives in exactly one place and neither API endpoint
+        has to reach into the repository bundle itself.
+        """
+
+        return {
+            "task": task,
+            "source_files": self._bundle.sources.list_for_task(task.id),
+            "stage_failures": self._bundle.failures.list_for_task(task.id),
+            "rule_results": self._bundle.results.list_for_task(task.id),
+            "manual_decisions": self._bundle.decisions.list_for_task(task.id),
+            "revisions": self._bundle.revisions.list_for_task(task.id),
+        }
+
     def detail(self, task_id: UUID) -> dict:
-        task = self.get(task_id)
-        results = self._bundle.results.list_for_task(task_id)
-        decisions = self._bundle.decisions.list_for_task(task_id)
-        return {"task": task, "source_files": self._bundle.sources.list_for_task(task_id), "stage_failures": self._bundle.failures.list_for_task(task_id), "rule_results": results, "manual_decisions": decisions, "revisions": self._bundle.revisions.list_for_task(task_id)}
+        return self._task_records(self.get(task_id))
+
+    def list_summary(self) -> tuple[dict, ...]:
+        """The same records for every recent task, newest first."""
+
+        return tuple(
+            self._task_records(task) for task in self._bundle.tasks.list_recent()
+        )
 
     def save_decision(
         self,

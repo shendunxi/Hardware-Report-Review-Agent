@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
+from hw_review.domain.addressing import a1_address
 from hw_review.domain.hashing import normalize_display_text, normalized_text_hash
+
+__all__ = [
+    "DocumentLookupError",
+    "ParserError",
+    "a1_address",
+    "normalize_display_text",
+    "normalized_text_hash",
+]
 
 
 class ParserError(Exception):
@@ -21,14 +30,4 @@ class DocumentLookupError(LookupError):
         super().__init__(message)
 
 
-def a1_address(row: int, column: int) -> str:
-    """Convert zero-based coordinates to an A1 cell address."""
 
-    if row < 0 or column < 0:
-        raise ValueError("row and column must be non-negative")
-    letters = ""
-    value = column + 1
-    while value:
-        value, remainder = divmod(value - 1, 26)
-        letters = chr(65 + remainder) + letters
-    return f"{letters}{row + 1}"

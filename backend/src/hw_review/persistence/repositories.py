@@ -28,6 +28,7 @@ from hw_review.domain import (
     TemplateValidationFinding,
     TemplateVersion,
 )
+from hw_review.domain.timestamps import as_stored_text, from_stored_text
 from hw_review.rules import A11Registry
 
 from .database import create_database_engine
@@ -92,19 +93,6 @@ def _json_text(value: Any) -> str:
     )
 
 
-def _utc_text(value: datetime) -> str:
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError("timestamp must include a UTC offset")
-    return value.astimezone(timezone.utc).isoformat()
-
-
-def _utc_datetime(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ValueError("stored timestamp has no UTC offset")
-    return parsed.astimezone(timezone.utc)
-
-
 def _task_values(task: ReviewTask) -> dict[str, Any]:
     return {
         "id": str(task.id),
@@ -117,8 +105,8 @@ def _task_values(task: ReviewTask) -> dict[str, Any]:
         "template_source_path": str(task.template_source_path) if task.template_source_path is not None else None,
         "template_source_sha256": task.template_source_sha256,
         "template_rules_snapshot": task.template_rules_snapshot,
-        "created_at": _utc_text(task.created_at),
-        "updated_at": _utc_text(task.updated_at),
+        "created_at": as_stored_text(task.created_at),
+        "updated_at": as_stored_text(task.updated_at),
     }
 
 
@@ -134,8 +122,8 @@ def _task_from_row(row) -> ReviewTask:
         template_source_path=getattr(row, "template_source_path", None),
         template_source_sha256=getattr(row, "template_source_sha256", None),
         template_rules_snapshot=getattr(row, "template_rules_snapshot", None) or "[]",
-        created_at=_utc_datetime(row.created_at),
-        updated_at=_utc_datetime(row.updated_at),
+        created_at=from_stored_text(row.created_at),
+        updated_at=from_stored_text(row.updated_at),
     )
 
 
@@ -155,7 +143,7 @@ def _result_values(result: RuleResult) -> dict[str, Any]:
         "diagnostics_json": _json_text(diagnostics),
         "engine_version": result.engine_version,
         "active_revision_no": result.active_revision_no,
-        "created_at": _utc_text(result.created_at),
+        "created_at": as_stored_text(result.created_at),
     }
 
 
@@ -175,7 +163,7 @@ def _result_from_row(row) -> RuleResult:
         unresolved_semantics=tuple(diagnostics["unresolved_semantics"]),
         engine_version=row.engine_version,
         active_revision_no=row.active_revision_no,
-        created_at=_utc_datetime(row.created_at),
+        created_at=from_stored_text(row.created_at),
     )
 
 
@@ -196,7 +184,7 @@ def _decision_values(
         "reason": decision.reason,
         "supplemental_evidence_json": _json_text(decision.supplemental_evidence),
         "actor": decision.actor,
-        "decided_at": _utc_text(decision.decided_at),
+        "decided_at": as_stored_text(decision.decided_at),
     }
 
 
@@ -211,7 +199,7 @@ def _decision_from_row(row) -> ManualDecision:
             for item in json.loads(row.supplemental_evidence_json)
         ),
         actor=row.actor,
-        decided_at=_utc_datetime(row.decided_at),
+        decided_at=from_stored_text(row.decided_at),
     )
 
 
@@ -237,7 +225,7 @@ def _source_from_row(row) -> StagedFile:
 
 def _failure_from_row(row) -> StageFailure:
     return StageFailure(id=row.id, task_id=row.task_id, stage=row.stage, code=row.code,
-                        message=row.message, occurred_at=_utc_datetime(row.occurred_at))
+                        message=row.message, occurred_at=from_stored_text(row.occurred_at))
 
 
 def _template_values(template: TemplateVersion) -> dict[str, Any]:
@@ -255,9 +243,9 @@ def _template_values(template: TemplateVersion) -> dict[str, Any]:
         "effective_rules": template.effective_rules,
         "validation_json": _json_text(template.validation_findings),
         "created_by": template.created_by,
-        "created_at": _utc_text(template.created_at),
-        "updated_at": _utc_text(template.updated_at),
-        "published_at": _utc_text(template.published_at) if template.published_at else None,
+        "created_at": as_stored_text(template.created_at),
+        "updated_at": as_stored_text(template.updated_at),
+        "published_at": as_stored_text(template.published_at) if template.published_at else None,
     }
 
 
@@ -279,9 +267,9 @@ def _template_from_row(row) -> TemplateVersion:
             for item in json.loads(row.validation_json)
         ),
         created_by=row.created_by,
-        created_at=_utc_datetime(row.created_at),
-        updated_at=_utc_datetime(row.updated_at),
-        published_at=_utc_datetime(row.published_at) if row.published_at else None,
+        created_at=from_stored_text(row.created_at),
+        updated_at=from_stored_text(row.updated_at),
+        published_at=from_stored_text(row.published_at) if row.published_at else None,
     )
 
 
@@ -298,8 +286,8 @@ def _template_rule_values(rule: TemplateRule) -> dict[str, Any]:
         "main_judgment": rule.main_judgment,
         "confirmed_boundary": rule.confirmed_boundary,
         "enabled": 1 if rule.enabled else 0,
-        "created_at": _utc_text(rule.created_at),
-        "updated_at": _utc_text(rule.updated_at),
+        "created_at": as_stored_text(rule.created_at),
+        "updated_at": as_stored_text(rule.updated_at),
     }
 
 
@@ -316,8 +304,8 @@ def _template_rule_from_row(row) -> TemplateRule:
         main_judgment=row.main_judgment,
         confirmed_boundary=row.confirmed_boundary,
         enabled=bool(row.enabled),
-        created_at=_utc_datetime(row.created_at),
-        updated_at=_utc_datetime(row.updated_at),
+        created_at=from_stored_text(row.created_at),
+        updated_at=from_stored_text(row.updated_at),
     )
 
 
@@ -329,7 +317,7 @@ def _template_audit_values(event: TemplateAuditEvent) -> dict[str, Any]:
         "action": event.action.value,
         "rule_id": event.rule_id,
         "actor": event.actor,
-        "occurred_at": _utc_text(event.occurred_at),
+        "occurred_at": as_stored_text(event.occurred_at),
         "before_json": _json_text(event.before) if event.before is not None else None,
         "after_json": _json_text(event.after) if event.after is not None else None,
     }
@@ -343,7 +331,7 @@ def _template_audit_from_row(row) -> TemplateAuditEvent:
         action=row.action,
         rule_id=row.rule_id,
         actor=row.actor,
-        occurred_at=_utc_datetime(row.occurred_at),
+        occurred_at=from_stored_text(row.occurred_at),
         before=json.loads(row.before_json) if row.before_json is not None else None,
         after=json.loads(row.after_json) if row.after_json is not None else None,
     )
@@ -444,7 +432,7 @@ class SqliteTaskRepository:
         """
         if lease_seconds <= 0:
             raise ValueError("execution lease must be positive")
-        stale_before = _utc_text(now - timedelta(seconds=lease_seconds))
+        stale_before = as_stored_text(now - timedelta(seconds=lease_seconds))
         with self._engine.begin() as connection:
             claimed = connection.execute(
                 update(tasks)
@@ -460,7 +448,7 @@ class SqliteTaskRepository:
                         ),
                     ),
                 )
-                .values(state="FILES_STAGED", execution_claim=str(uuid4()), updated_at=_utc_text(now))
+                .values(state="FILES_STAGED", execution_claim=str(uuid4()), updated_at=as_stored_text(now))
             )
             if claimed.rowcount != 1:
                 return None
@@ -480,6 +468,28 @@ class SqliteSourceFileRepository:
             raise RepositoryConflictError("source file already exists") from error
         return source
 
+    def create_all(self, sources: tuple[StagedFile, ...]) -> tuple[StagedFile, ...]:
+        """Record a task's whole source set in one transaction.
+
+        A task is only meaningful together with every file it was created from, so
+        the set is inserted atomically: a partial success would leave the task
+        pointing at a silent subset of the uploads it was asked to review.
+        """
+
+        if not sources:
+            return ()
+        try:
+            with self._engine.begin() as connection:
+                connection.execute(
+                    insert(source_files),
+                    [_source_values(source) for source in sources],
+                )
+        except IntegrityError as error:
+            raise RepositoryConflictError(
+                "staged source set violates a database constraint"
+            ) from error
+        return tuple(sources)
+
     def list_for_task(self, task_id: UUID) -> tuple[StagedFile, ...]:
         with self._engine.connect() as connection:
             rows = connection.execute(select(source_files).where(source_files.c.task_id == str(task_id)).order_by(source_files.c.id)).all()
@@ -495,7 +505,7 @@ class SqliteStageFailureRepository:
             connection.execute(insert(stage_failures), {
                 "id": str(failure.id), "task_id": str(failure.task_id), "stage": failure.stage,
                 "code": failure.code, "message": failure.message,
-                "occurred_at": _utc_text(failure.occurred_at),
+                "occurred_at": as_stored_text(failure.occurred_at),
             })
         return failure
 
@@ -903,7 +913,7 @@ class SqliteRevisionRepository:
                         "id": str(revision.id),
                         "task_id": str(revision.task_id),
                         "revision_no": revision.revision_no,
-                        "completed_at": _utc_text(revision.completed_at),
+                        "completed_at": as_stored_text(revision.completed_at),
                         "result_snapshot": revision.result_snapshot,
                     },
                 )
@@ -933,7 +943,7 @@ class SqliteRevisionRepository:
             id=row.id,
             task_id=row.task_id,
             revision_no=row.revision_no,
-            completed_at=_utc_datetime(row.completed_at),
+            completed_at=from_stored_text(row.completed_at),
             result_snapshot=row.result_snapshot,
         )
 
@@ -941,7 +951,7 @@ class SqliteRevisionRepository:
         with self._engine.connect() as connection:
             rows = connection.execute(select(review_revisions).where(review_revisions.c.task_id == str(task_id)).order_by(review_revisions.c.revision_no)).all()
         return tuple(ReviewRevision(id=row.id, task_id=row.task_id, revision_no=row.revision_no,
-                                    completed_at=_utc_datetime(row.completed_at), result_snapshot=row.result_snapshot)
+                                    completed_at=from_stored_text(row.completed_at), result_snapshot=row.result_snapshot)
                      for row in rows)
 
     def update_snapshot(
@@ -998,7 +1008,7 @@ class RepositoryBundle:
         """Persist FAILED and its diagnosis together, dropping partial active results."""
         with self.engine.begin() as connection:
             connection.execute(delete(rule_results).where(rule_results.c.task_id == str(task.id), rule_results.c.active_revision_no == task.active_revision_no))
-            connection.execute(insert(stage_failures), {"id": str(failure.id), "task_id": str(failure.task_id), "stage": failure.stage, "code": failure.code, "message": failure.message, "occurred_at": _utc_text(failure.occurred_at)})
+            connection.execute(insert(stage_failures), {"id": str(failure.id), "task_id": str(failure.task_id), "stage": failure.stage, "code": failure.code, "message": failure.message, "occurred_at": as_stored_text(failure.occurred_at)})
             values = _task_values(task); values.pop("id")
             connection.execute(update(tasks).where(tasks.c.id == str(task.id)).values(**values, execution_claim=None))
 
@@ -1023,7 +1033,7 @@ class RepositoryBundle:
                 "decisions": [_decision_from_row(row).model_dump(mode="json") for row in decision_rows],
             })
             revision = ReviewRevision(id=revision_id, task_id=task.id, revision_no=revision_no, completed_at=completed_at, result_snapshot=snapshot)
-            connection.execute(insert(review_revisions), {"id": str(revision.id), "task_id": str(revision.task_id), "revision_no": revision.revision_no, "completed_at": _utc_text(revision.completed_at), "result_snapshot": revision.result_snapshot})
+            connection.execute(insert(review_revisions), {"id": str(revision.id), "task_id": str(revision.task_id), "revision_no": revision.revision_no, "completed_at": as_stored_text(revision.completed_at), "result_snapshot": revision.result_snapshot})
             connection.execute(update(manual_decisions).where(manual_decisions.c.task_id == str(task.id), manual_decisions.c.active_revision_no == task.active_revision_no).values(revision_id=str(revision.id)))
             values = _task_values(task); values.pop("id")
             connection.execute(update(tasks).where(tasks.c.id == str(task.id)).values(**values))

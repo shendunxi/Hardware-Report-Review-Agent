@@ -168,16 +168,19 @@ async def list_tasks(
     _principal: Annotated[AccessContext, Depends(require_reviewer)],
 ):
     service = _service(request)
+    # list_summary keeps this endpoint off the repository bundle: the read order
+    # for a task's children belongs next to the single-task detail it must stay
+    # consistent with.
     return {
         "tasks": [
             {
-                **_task_payload(service, task, service._bundle.sources.list_for_task(task.id)),
-                "stage_failures": [_payload(item) for item in service._bundle.failures.list_for_task(task.id)],
-                "rule_results": [_payload(item) for item in service._bundle.results.list_for_task(task.id)],
-                "manual_decisions": [_payload(item) for item in service._bundle.decisions.list_for_task(task.id)],
-                "revisions": [_payload(item) for item in service._bundle.revisions.list_for_task(task.id)],
+                **_task_payload(service, record["task"], record["source_files"]),
+                "stage_failures": [_payload(item) for item in record["stage_failures"]],
+                "rule_results": [_payload(item) for item in record["rule_results"]],
+                "manual_decisions": [_payload(item) for item in record["manual_decisions"]],
+                "revisions": [_payload(item) for item in record["revisions"]],
             }
-            for task in service._bundle.tasks.list_recent()
+            for record in service.list_summary()
         ]
     }
 
